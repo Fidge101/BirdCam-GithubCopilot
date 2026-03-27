@@ -588,7 +588,7 @@
       streamHealthy: true,
       timelapsePollHandle: null,
       mergePollHandle: null,
-      mergeAutoDownloadJobId: null,
+      mergeDownloadUrl: null,
     };
 
     function formatUptime(totalSeconds) {
@@ -818,6 +818,12 @@
       const syncMergeDownloadState = () => {
         const start = exportStartDateSelect.value;
         const end = exportEndDateSelect.value;
+        if (state.mergeDownloadUrl) {
+          downloadMergedMp4Btn.disabled = false;
+          downloadMergedMp4Btn.textContent = 'Download Ready MP4';
+          return;
+        }
+        downloadMergedMp4Btn.textContent = 'Download Stitched MP4';
         downloadMergedMp4Btn.disabled = !start || !end || start > end;
       };
 
@@ -844,18 +850,15 @@
               clearInterval(state.mergePollHandle);
               state.mergePollHandle = null;
             }
-            downloadMergedMp4Btn.disabled = false;
-            if (job.download_url && state.mergeAutoDownloadJobId === job.job_id) {
-              window.open(job.download_url, '_blank', 'noopener');
-              state.mergeAutoDownloadJobId = null;
-            }
-            showToast('Stitched MP4 ready', 'success');
+            state.mergeDownloadUrl = job.download_url || null;
+            syncMergeDownloadState();
+            showToast('Stitched MP4 ready - click to download', 'success');
           } else if (job.status === 'error') {
             if (state.mergePollHandle) {
               clearInterval(state.mergePollHandle);
               state.mergePollHandle = null;
             }
-            state.mergeAutoDownloadJobId = null;
+            state.mergeDownloadUrl = null;
             syncMergeDownloadState();
             showToast(job.message || 'Merge failed', 'error');
           }
@@ -1034,14 +1037,21 @@
       });
 
       exportStartDateSelect.addEventListener('change', () => {
+        state.mergeDownloadUrl = null;
         syncMergeDownloadState();
       });
 
       exportEndDateSelect.addEventListener('change', () => {
+        state.mergeDownloadUrl = null;
         syncMergeDownloadState();
       });
 
       downloadMergedMp4Btn.addEventListener('click', () => {
+        if (state.mergeDownloadUrl) {
+          window.open(state.mergeDownloadUrl, '_blank', 'noopener');
+          return;
+        }
+
         const start = exportStartDateSelect.value;
         const end = exportEndDateSelect.value;
         if (!start || !end) {
@@ -1054,6 +1064,8 @@
         }
 
         downloadMergedMp4Btn.disabled = true;
+        downloadMergedMp4Btn.textContent = 'Stitching...';
+        state.mergeDownloadUrl = null;
         mergeStatusText.textContent = 'RUNNING: Starting merge...';
         mergeProgressBar.style.width = '0%';
 
@@ -1061,12 +1073,12 @@
           method: 'POST',
           body: JSON.stringify({ start, end }),
         }).then((job) => {
-          state.mergeAutoDownloadJobId = job.job_id || null;
           renderMergeStatus(job);
           if (!state.mergePollHandle) {
             state.mergePollHandle = setInterval(pollMergeStatus, 1500);
           }
         }).catch((err) => {
+          state.mergeDownloadUrl = null;
           syncMergeDownloadState();
           showToast(`Merge start failed: ${err.message}`, 'error');
         });

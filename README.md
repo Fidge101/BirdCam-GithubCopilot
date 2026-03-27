@@ -220,8 +220,9 @@ To download one stitched MP4 across multiple days, use the `Stitch MP4 Date Rang
 
 - choose start date and end date
 - click `Download Stitched MP4`
-- BirdCam merges available daily MP4 exports in that range and downloads one file
+- BirdCam merges available daily MP4 exports in that range
 - the dashboard shows merge status and progress while stitching runs
+- when status reaches `COMPLETED`, click `Download Ready MP4`
 
 ## Raspberry Pi Smoke Test Checklist
 

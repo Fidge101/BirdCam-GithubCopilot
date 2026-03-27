@@ -6,6 +6,7 @@ import logging
 import socket
 import threading
 import time
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -25,6 +26,11 @@ try:
     import imageio.v2 as imageio
 except ImportError:  # pragma: no cover - optional dependency fallback
     imageio = None
+
+try:
+    from imageio_ffmpeg import get_ffmpeg_exe
+except ImportError:  # pragma: no cover - optional dependency fallback
+    get_ffmpeg_exe = None
 
 
 LOGGER = logging.getLogger(__name__)
@@ -277,6 +283,38 @@ def _stitch_mp4_files(
                 on_video_completed(index, len(video_paths), video_path)
     finally:
         writer.close()
+
+
+def _concat_mp4_files_ffmpeg(video_paths: list[Path], output_path: Path) -> None:
+    """Concatenate MP4 files using ffmpeg concat demuxer with stream copy."""
+
+    if get_ffmpeg_exe is None:
+        raise RuntimeError("imageio-ffmpeg is required for ffmpeg-based concatenation")
+
+    ffmpeg_exe = get_ffmpeg_exe()
+    list_file = output_path.with_suffix(".txt")
+    list_content = "\n".join([f"file '{path.resolve()}'" for path in video_paths]) + "\n"
+    list_file.write_text(list_content, encoding="utf-8")
+
+    try:
+        command = [
+            ffmpeg_exe,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file),
+            "-c",
+            "copy",
+            str(output_path),
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        if completed.returncode != 0:
+            raise RuntimeError((completed.stderr or completed.stdout or "ffmpeg concat failed").strip())
+    finally:
+        list_file.unlink(missing_ok=True)
 
 
 def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threading.Event) -> Flask:
@@ -638,31 +676,37 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
                 )
                 return
 
-            def on_started(index: int, total: int, path: Path) -> None:
-                percent = max(1, int(((index - 1) / total) * 90))
-                state.update_merge_job(
-                    {
-                        "message": f"Merging {index}/{total}: {path.name}",
-                        "progress": percent,
-                    }
-                )
-
-            def on_completed(index: int, total: int, path: Path) -> None:
-                percent = max(5, int((index / total) * 95))
-                state.update_merge_job(
-                    {
-                        "message": f"Merged {index}/{total}: {path.name}",
-                        "progress": percent,
-                    }
-                )
-
             try:
-                _stitch_mp4_files(
-                    selected_videos,
-                    merged_path,
-                    on_video_started=on_started,
-                    on_video_completed=on_completed,
-                )
+                state.update_merge_job({"message": "Concatenating MP4 files", "progress": 10})
+                try:
+                    _concat_mp4_files_ffmpeg(selected_videos, merged_path)
+                except Exception as concat_exc:
+                    LOGGER.warning("ffmpeg concat failed, falling back to re-encode: %s", concat_exc)
+
+                    def on_started(index: int, total: int, path: Path) -> None:
+                        percent = max(10, int(((index - 1) / total) * 80) + 10)
+                        state.update_merge_job(
+                            {
+                                "message": f"Re-encoding {index}/{total}: {path.name}",
+                                "progress": percent,
+                            }
+                        )
+
+                    def on_completed(index: int, total: int, path: Path) -> None:
+                        percent = max(15, int((index / total) * 90))
+                        state.update_merge_job(
+                            {
+                                "message": f"Re-encoded {index}/{total}: {path.name}",
+                                "progress": percent,
+                            }
+                        )
+
+                    _stitch_mp4_files(
+                        selected_videos,
+                        merged_path,
+                        on_video_started=on_started,
+                        on_video_completed=on_completed,
+                    )
                 state.update_merge_job(
                     {
                         "status": "completed",
