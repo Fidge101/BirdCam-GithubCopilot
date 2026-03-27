@@ -40,6 +40,25 @@ If you see an OpenCV/FFmpeg message like `Stream timeout triggered after 30000 m
 - Include `:554` explicitly in test URLs, and URL-encode special characters in passwords when needed
 - Ensure camera and Pi are on the same subnet/VLAN and that port 554 is not blocked by firewall rules
 
+## Copy Repo To Raspberry Pi (Terminal)
+
+On the Raspberry Pi terminal, install Git (if needed), clone the repository, and enter the project folder:
+
+```bash
+sudo apt update
+sudo apt install -y git
+cd ~
+git clone https://github.com/Fidge101/BirdCam-GithubCopilot.git
+cd BirdCam-GithubCopilot
+```
+
+If you already cloned it before, update the local copy instead:
+
+```bash
+cd ~/BirdCam-GithubCopilot
+git pull
+```
+
 ## Raspberry Pi Setup
 
 Create and activate a virtual environment, then install system and Python dependencies:
