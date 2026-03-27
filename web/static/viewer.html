@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BirdCam Image Viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0d0f10;
+      --panel: #161a1d;
+      --amber: #f5a623;
+      --cyan: #00c8b4;
+      --text: #d7dadc;
+      --muted: #8e959b;
+      --err: #ff4d5a;
+      --transition: 200ms ease;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      min-height: 100vh;
+    }
+    h1, h2, h3 { margin: 0; font-family: 'Syne', sans-serif; }
+
+    .page {
+      display: grid;
+      grid-template-columns: minmax(320px, 1fr) 2fr;
+      gap: 12px;
+      padding: 12px;
+      min-height: 100vh;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid #20262a;
+      border-radius: 10px;
+      padding: 12px;
+      min-height: 0;
+    }
+
+    .controls {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .btn {
+      border: 1px solid #2a3034;
+      background: #101518;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      min-height: 38px;
+      transition: all var(--transition);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn:hover { border-color: var(--amber); color: var(--amber); }
+    .btn.cyan { border-color: var(--cyan); color: var(--cyan); background: rgba(0,200,180,.1); }
+
+    .field {
+      display: grid;
+      gap: 4px;
+    }
+
+    label { color: var(--muted); font-size: 12px; }
+
+    input[type="datetime-local"], input[type="number"] {
+      width: 100%;
+      background: #0f1315;
+      color: var(--text);
+      border: 1px solid #2a3035;
+      border-radius: 6px;
+      padding: 8px;
+      font-family: inherit;
+      font-size: 12px;
+    }
+
+    .button-row {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 12px;
+      padding: 4px 0;
+    }
+
+    .thumb-grid {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      overflow: auto;
+      max-height: 62vh;
+      padding-right: 4px;
+    }
+
+    .thumb {
+      border: 1px solid #2a3035;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0f1315;
+      cursor: pointer;
+      transition: border-color var(--transition);
+    }
+    .thumb:hover,
+    .thumb.active {
+      border-color: var(--amber);
+    }
+
+    .thumb img {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      display: block;
+      background: #0b0d0f;
+    }
+
+    .thumb-info {
+      font-size: 10px;
+      color: var(--muted);
+      padding: 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .preview-wrap {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 10px;
+      height: 100%;
+    }
+
+    .preview-box {
+      border: 1px solid #2a3034;
+      border-radius: 10px;
+      overflow: hidden;
+      min-height: 60vh;
+      background: #0b0d0f;
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+
+    .preview-box img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+
+    .preview-empty {
+      color: var(--muted);
+      letter-spacing: .6px;
+      text-align: center;
+      padding: 20px;
+    }
+
+    .preview-meta {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toast {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      border: 1px solid;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      background: #11161a;
+      z-index: 100;
+      display: none;
+    }
+    .toast.show { display: block; }
+    .toast.error { color: var(--err); border-color: var(--err); }
+    .toast.info { color: var(--amber); border-color: var(--amber); }
+
+    @media (max-width: 1024px) {
+      .page { grid-template-columns: 1fr; }
+      .thumb-grid { max-height: 280px; }
+      .preview-box { min-height: 44vh; }
+    }
+
+    @media (max-width: 680px) {
+      .page { padding: 10px; gap: 10px; }
+      .panel { padding: 10px; }
+      .button-row { grid-template-columns: 1fr; }
+      .thumb-grid { grid-template-columns: 1fr; }
+      .toolbar { flex-wrap: wrap; }
+      .toolbar .btn { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="panel controls">
+      <div class="toolbar">
+        <h2>Image Viewer</h2>
+        <a class="btn" href="/">Back To Dashboard</a>
+      </div>
+
+      <div class="field">
+        <label for="startAt">Start Time</label>
+        <input id="startAt" type="datetime-local" />
+      </div>
+
+      <div class="field">
+        <label for="endAt">End Time</label>
+        <input id="endAt" type="datetime-local" />
+      </div>
+
+      <div class="field">
+        <label for="limit">Max Results</label>
+        <input id="limit" type="number" min="1" max="10000" value="500" />
+      </div>
+
+      <div class="button-row">
+        <button id="applyFilter" class="btn cyan">Apply Filter</button>
+        <button id="last24h" class="btn">Last 24 Hours</button>
+        <button id="clearFilter" class="btn">Clear Filter</button>
+        <button id="refresh" class="btn">Refresh</button>
+      </div>
+
+      <div id="resultsMeta" class="meta">No frames loaded yet.</div>
+
+      <div id="thumbGrid" class="thumb-grid"></div>
+    </section>
+
+    <section class="panel preview-wrap">
+      <h3>Large Preview</h3>
+      <div class="preview-box">
+        <img id="previewImage" alt="Selected frame" />
+        <div id="previewEmpty" class="preview-empty">Select a frame from the list to preview it.</div>
+      </div>
+      <div class="preview-meta">
+        <span id="previewName">File: —</span>
+        <span id="previewTime">Timestamp: —</span>
+        <span id="previewSize">Size: —</span>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast info"></div>
+
+  <script>
+    const state = {
+      frames: [],
+      selected: null,
+      toastTimer: null,
+    };
+
+    function showToast(message, type = 'info') {
+      const toast = document.getElementById('toast');
+      toast.className = `toast ${type} show`;
+      toast.textContent = message;
+      if (state.toastTimer) clearTimeout(state.toastTimer);
+      state.toastTimer = setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    function nowLocalInputValue(date) {
+      const d = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+      return d.toISOString().slice(0, 16);
+    }
+
+    function setLast24Hours() {
+      const end = new Date();
+      const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+      document.getElementById('startAt').value = nowLocalInputValue(start);
+      document.getElementById('endAt').value = nowLocalInputValue(end);
+    }
+
+    function buildQuery() {
+      const startAt = document.getElementById('startAt').value;
+      const endAt = document.getElementById('endAt').value;
+      const limit = document.getElementById('limit').value;
+
+      const query = new URLSearchParams();
+      if (startAt) query.set('start', startAt);
+      if (endAt) query.set('end', endAt);
+      if (limit) query.set('limit', limit);
+      const queryString = query.toString();
+      return queryString ? `?${queryString}` : '';
+    }
+
+    function renderPreview(frame) {
+      const image = document.getElementById('previewImage');
+      const empty = document.getElementById('previewEmpty');
+      const name = document.getElementById('previewName');
+      const time = document.getElementById('previewTime');
+      const size = document.getElementById('previewSize');
+
+      if (!frame) {
+        image.style.display = 'none';
+        image.removeAttribute('src');
+        empty.style.display = 'block';
+        name.textContent = 'File: —';
+        time.textContent = 'Timestamp: —';
+        size.textContent = 'Size: —';
+        return;
+      }
+
+      image.src = `${frame.url}?t=${Date.now()}`;
+      image.style.display = 'block';
+      empty.style.display = 'none';
+      name.textContent = `File: ${frame.filename}`;
+      time.textContent = `Timestamp: ${new Date(frame.timestamp).toLocaleString()}`;
+      size.textContent = `Size: ${frame.size_kb} KB`;
+    }
+
+    function renderThumbnails() {
+      const grid = document.getElementById('thumbGrid');
+      const resultsMeta = document.getElementById('resultsMeta');
+
+      grid.innerHTML = '';
+      resultsMeta.textContent = `${state.frames.length} frame(s) loaded`;
+
+      if (state.frames.length === 0) {
+        renderPreview(null);
+        return;
+      }
+
+      state.frames.forEach((frame) => {
+        const card = document.createElement('div');
+        card.className = 'thumb';
+        if (state.selected && state.selected.filename === frame.filename) {
+          card.classList.add('active');
+        }
+
+        const image = document.createElement('img');
+        image.loading = 'lazy';
+        image.src = frame.url;
+        image.alt = frame.filename;
+
+        const info = document.createElement('div');
+        info.className = 'thumb-info';
+        info.textContent = `${frame.filename} • ${new Date(frame.timestamp).toLocaleString()}`;
+
+        card.appendChild(image);
+        card.appendChild(info);
+
+        card.addEventListener('click', () => {
+          state.selected = frame;
+          renderPreview(frame);
+          renderThumbnails();
+        });
+
+        grid.appendChild(card);
+      });
+
+      if (!state.selected || !state.frames.find((frame) => frame.filename === state.selected.filename)) {
+        state.selected = state.frames[0];
+      }
+      renderPreview(state.selected);
+    }
+
+    async function loadFrames() {
+      try {
+        const response = await fetch(`/api/frames${buildQuery()}`);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error || `${response.status} ${response.statusText}`);
+        }
+
+        state.frames = data;
+        renderThumbnails();
+      } catch (error) {
+        showToast(`Failed to load frames: ${error.message}`, 'error');
+      }
+    }
+
+    function clearFilters() {
+      document.getElementById('startAt').value = '';
+      document.getElementById('endAt').value = '';
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('applyFilter').addEventListener('click', loadFrames);
+      document.getElementById('refresh').addEventListener('click', loadFrames);
+      document.getElementById('last24h').addEventListener('click', () => {
+        setLast24Hours();
+        loadFrames();
+      });
+      document.getElementById('clearFilter').addEventListener('click', () => {
+        clearFilters();
+        loadFrames();
+      });
+
+      loadFrames();
+    });
+  </script>
+</body>
+</html>

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -37,6 +38,22 @@ class AppConfig:
     port: int
     log_file_path: Path
     env_path: Path
+    daily_export_enabled: bool
+    daily_export_time: str
+    daily_export_dir: Path
+
+
+def _parse_bool(value: str | None, default: bool) -> bool:
+    """Parse common environment boolean strings with a default fallback."""
+
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value: {value}")
 
 
 def _require_env(name: str) -> str:
@@ -73,6 +90,9 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     stream_quality = int(os.getenv("STREAM_QUALITY", "80"))
     port = int(os.getenv("PORT", "5000"))
     log_file_path_raw = Path(os.getenv("LOG_FILE_PATH", "./birdcam.log"))
+    daily_export_enabled = _parse_bool(os.getenv("DAILY_EXPORT_ENABLED"), True)
+    daily_export_time = os.getenv("DAILY_EXPORT_TIME", "00:10").strip()
+    daily_export_dir_raw = Path(os.getenv("DAILY_EXPORT_DIR", "./output/daily"))
 
     timelapse_output_path = (
         timelapse_output_path_raw
@@ -85,6 +105,9 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     log_file_path = (
         log_file_path_raw if log_file_path_raw.is_absolute() else (env_dir / log_file_path_raw)
     ).resolve()
+    daily_export_dir = (
+        daily_export_dir_raw if daily_export_dir_raw.is_absolute() else (env_dir / daily_export_dir_raw)
+    ).resolve()
 
     if capture_interval_seconds <= 0:
         raise ValueError("CAPTURE_INTERVAL_SECONDS must be greater than zero")
@@ -94,10 +117,15 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         raise ValueError("STREAM_QUALITY must be between 0 and 100")
     if not 1 <= port <= 65535:
         raise ValueError("PORT must be between 1 and 65535")
+    try:
+        datetime.strptime(daily_export_time, "%H:%M")
+    except ValueError as exc:
+        raise ValueError("DAILY_EXPORT_TIME must use HH:MM 24-hour format") from exc
 
     frame_store_dir.mkdir(parents=True, exist_ok=True)
     timelapse_output_path.parent.mkdir(parents=True, exist_ok=True)
     log_file_path.parent.mkdir(parents=True, exist_ok=True)
+    daily_export_dir.mkdir(parents=True, exist_ok=True)
 
     # Tapo C120 exposes /stream1 as the primary HD RTSP feed; /stream2 is the
     # lower-resolution sub-stream intended for lighter-bandwidth clients.
@@ -118,4 +146,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         port=port,
         log_file_path=log_file_path,
         env_path=env_path.expanduser().resolve(),
+        daily_export_enabled=daily_export_enabled,
+        daily_export_time=daily_export_time,
+        daily_export_dir=daily_export_dir,
     )

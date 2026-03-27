@@ -9,7 +9,7 @@ BirdCam is a Python application for Raspberry Pi that connects to a Tapo C120 ov
 - Run a live viewer with timestamp overlay
 - Capture frames in a background thread while the viewer stays open
 - Keep frame storage bounded by deleting the oldest captures
-- Generate a contact-sheet timelapse JPEG and optional animated GIF
+- Generate a contact-sheet timelapse JPEG plus optional animated GIF and MP4
 - Run a local web dashboard with MJPEG live stream, controls, and log tailing
 
 ## Find The Camera IP
@@ -130,6 +130,9 @@ Required variables:
 - `STREAM_QUALITY` - MJPEG JPEG quality (`0-100`, higher = better quality + bandwidth)
 - `PORT` - local dashboard HTTP port (default `5000`)
 - `LOG_FILE_PATH` - log file path used by CLI and dashboard live logs
+- `DAILY_EXPORT_ENABLED` - enable daily timelapse export scheduler (`true`/`false`)
+- `DAILY_EXPORT_TIME` - local 24-hour time to generate previous day's export (`HH:MM`)
+- `DAILY_EXPORT_DIR` - output directory for dated daily exports (e.g. `./output/daily`)
 
 ## Usage
 
@@ -165,6 +168,11 @@ Generate the timelapse contact sheet from saved frames:
 python main.py --timelapse
 ```
 
+When `imageio` + `imageio-ffmpeg` are installed, timelapse generation also writes:
+
+- `<TIMELAPSE_OUTPUT_PATH>.gif`
+- `<TIMELAPSE_OUTPUT_PATH>.mp4`
+
 Override the number of timelapse grid columns:
 
 ```bash
@@ -184,7 +192,71 @@ Open the dashboard from any browser on the same network using either:
 - `http://raspberrypi.local:5000` (or your Pi hostname)
 - `http://<PI_IP_ADDRESS>:5000`
 
+For high-volume frame browsing, open the dedicated image viewer page with large preview and time filtering:
+
+- `http://raspberrypi.local:5000/viewer`
+- `http://<PI_IP_ADDRESS>:5000/viewer`
+
+The viewer supports:
+
+- Start/end time filtering
+- Max results limit control
+- Large preview panel for selected frames
+- Fast thumbnail browsing for many images
+
 The MJPEG stream is CPU-light on Raspberry Pi because frames are served directly as multipart JPEG (no video transcoding pipeline).
+
+In the dashboard Timelapse panel, use `View Timelapse File`, `View GIF`, or `View MP4` after generation completes.
+
+BirdCam also supports daily scheduled timelapse exports:
+
+- At `DAILY_EXPORT_TIME`, it generates an export for the previous day
+- Exports are stored under `DAILY_EXPORT_DIR/YYYY-MM-DD/`
+- Each dated folder can contain `timelapse.jpg`, `timelapse.jpg.gif`, and `timelapse.jpg.mp4`
+
+Use the dashboard `Daily Exports By Date` picker in the Timelapse panel to browse and open exports by date.
+
+To download one stitched MP4 across multiple days, use the `Stitch MP4 Date Range` controls in the same panel:
+
+- choose start date and end date
+- click `Download Stitched MP4`
+- BirdCam merges available daily MP4 exports in that range and downloads one file
+- the dashboard shows merge status and progress while stitching runs
+
+## Raspberry Pi Smoke Test Checklist
+
+Run this quick end-to-end verification on the Pi after updates:
+
+1. Install/update dependencies and start web mode:
+
+```bash
+cd ~/BirdCam-GithubCopilot
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py --web
+```
+
+2. Open dashboard (`http://<PI_IP>:5000`) and confirm:
+
+- live stream appears
+- `Capture Frame Now` adds a new frame thumbnail
+
+3. Generate timelapse and verify outputs:
+
+- click `Generate Timelapse`
+- verify `View Timelapse File`, `View GIF`, and `View MP4` open correctly
+
+4. Validate daily exports by date:
+
+- ensure dated folders exist under `DAILY_EXPORT_DIR/YYYY-MM-DD/`
+- in `Daily Exports By Date`, pick a date and open exported files
+
+5. Validate stitched range export with progress:
+
+- choose start/end dates in `Stitch MP4 Date Range`
+- click `Download Stitched MP4`
+- verify status/progress updates from `RUNNING` to `COMPLETED`
+- verify merged MP4 downloads and plays
 
 For remote access outside your local network, use an SSH tunnel (simple and out-of-scope for full VPN setup):
 
@@ -204,3 +276,4 @@ Then open `http://localhost:5000` on your local machine.
 - `main.py` provides the CLI entry point
 - `web/server.py` provides Flask APIs, MJPEG stream, and SSE log streaming
 - `web/static/index.html` provides the single-file dashboard UI
+- `web/static/viewer.html` provides the dedicated image viewer page

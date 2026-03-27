@@ -6,8 +6,10 @@ import logging
 import socket
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
+from collections.abc import Callable
 
 import cv2
 import numpy as np
@@ -18,6 +20,11 @@ from camera import CameraStream
 from config import AppConfig
 from scheduler import capture_single_frame
 from timelapse import generate_timelapse
+
+try:
+    import imageio.v2 as imageio
+except ImportError:  # pragma: no cover - optional dependency fallback
+    imageio = None
 
 
 LOGGER = logging.getLogger(__name__)
@@ -36,6 +43,17 @@ class DashboardState:
         self.timelapse_job: dict[str, str] = {
             "status": "idle",
             "message": "No timelapse job started",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.merge_job: dict[str, object] = {
+            "job_id": None,
+            "status": "idle",
+            "message": "No merge job started",
+            "progress": 0,
+            "start": None,
+            "end": None,
+            "video_count": 0,
+            "download_url": None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         self._lock = threading.Lock()
@@ -67,6 +85,38 @@ class DashboardState:
 
         with self._lock:
             return dict(self.timelapse_job)
+
+    def set_merge_job(self, payload: dict[str, object]) -> None:
+        """Set stitched export merge job state in a thread-safe way."""
+
+        with self._lock:
+            merged_payload = {
+                "job_id": None,
+                "status": "idle",
+                "message": "No merge job started",
+                "progress": 0,
+                "start": None,
+                "end": None,
+                "video_count": 0,
+                "download_url": None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            merged_payload.update(payload)
+            merged_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self.merge_job = merged_payload
+
+    def update_merge_job(self, updates: dict[str, object]) -> None:
+        """Apply partial updates to stitched export merge job state."""
+
+        with self._lock:
+            self.merge_job.update(updates)
+            self.merge_job["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    def get_merge_job(self) -> dict[str, object]:
+        """Read stitched export merge job state in a thread-safe way."""
+
+        with self._lock:
+            return dict(self.merge_job)
 
 
 def _offline_placeholder_frame() -> np.ndarray:
@@ -138,6 +188,17 @@ def _timestamp_from_filename(frame_name: str, frame_path: Path) -> str:
         return modified_at.isoformat()
 
 
+def _parse_iso_datetime(value: str | None, field_name: str) -> datetime | None:
+    """Parse an ISO-8601 datetime string for API filtering parameters."""
+
+    if value is None or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"Invalid datetime for {field_name}: {value}") from exc
+
+
 def _update_env_file(env_path: Path, updates: dict[str, str]) -> None:
     """Persist selected config values back into the .env file in place.
 
@@ -173,6 +234,51 @@ def _update_env_file(env_path: Path, updates: dict[str, str]) -> None:
     env_path.write_text("\n".join(rewritten).rstrip() + "\n", encoding="utf-8")
 
 
+def _safe_export_file_path(export_root: Path, relative_path: str) -> Path:
+    """Resolve and validate a daily-export file path under export root."""
+
+    candidate = (export_root / relative_path).resolve()
+    if export_root not in candidate.parents and candidate != export_root:
+        raise ValueError("Invalid export path")
+    return candidate
+
+
+def _stitch_mp4_files(
+    video_paths: list[Path],
+    output_path: Path,
+    on_video_started: Callable[[int, int, Path], None] | None = None,
+    on_video_completed: Callable[[int, int, Path], None] | None = None,
+) -> None:
+    """Concatenate multiple MP4 files into one MP4 by appending decoded frames."""
+
+    if imageio is None:
+        raise RuntimeError("imageio is required for MP4 stitching")
+
+    fps = 8
+    first_reader = imageio.get_reader(str(video_paths[0]))
+    try:
+        metadata = first_reader.get_meta_data() or {}
+        fps = int(metadata.get("fps", 8))
+    finally:
+        first_reader.close()
+
+    writer = imageio.get_writer(str(output_path), fps=fps, codec="libx264")
+    try:
+        for index, video_path in enumerate(video_paths, start=1):
+            if on_video_started is not None:
+                on_video_started(index, len(video_paths), video_path)
+            reader = imageio.get_reader(str(video_path))
+            try:
+                for frame in reader:
+                    writer.append_data(frame)
+            finally:
+                reader.close()
+            if on_video_completed is not None:
+                on_video_completed(index, len(video_paths), video_path)
+    finally:
+        writer.close()
+
+
 def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threading.Event) -> Flask:
     """Create and configure the Flask dashboard application.
 
@@ -195,6 +301,12 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
         """Serve the single-page BirdCam dashboard UI."""
 
         return send_from_directory(app.static_folder, "index.html")
+
+    @app.route("/viewer")
+    def image_viewer() -> Response:
+        """Serve the dedicated image viewer page with time filters."""
+
+        return send_from_directory(app.static_folder, "viewer.html")
 
     @app.get("/stream")
     def stream() -> Response:
@@ -257,18 +369,44 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
             LOGGER.info("Cleared %s frames from %s", deleted, config.frame_store_dir)
             return jsonify({"ok": True, "deleted": deleted})
 
+        try:
+            start_at = _parse_iso_datetime(request.args.get("start"), "start")
+            end_at = _parse_iso_datetime(request.args.get("end"), "end")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        limit_value = request.args.get("limit")
+        limit = None
+        if limit_value is not None and limit_value.strip():
+            try:
+                limit = int(limit_value)
+            except ValueError:
+                return jsonify({"ok": False, "error": "limit must be an integer"}), 400
+            if limit <= 0:
+                return jsonify({"ok": False, "error": "limit must be greater than zero"}), 400
+
         frames = []
         for frame_path in sorted(config.frame_store_dir.glob("*.jpg"), reverse=True):
             stat = frame_path.stat()
             safe_name = frame_path.name
+            timestamp_iso = _timestamp_from_filename(safe_name, frame_path)
+            frame_timestamp = datetime.fromisoformat(timestamp_iso)
+
+            if start_at is not None and frame_timestamp < start_at:
+                continue
+            if end_at is not None and frame_timestamp > end_at:
+                continue
+
             frames.append(
                 {
                     "filename": safe_name,
-                    "timestamp": _timestamp_from_filename(safe_name, frame_path),
+                    "timestamp": timestamp_iso,
                     "size_kb": round(stat.st_size / 1024.0, 1),
                     "url": f"/api/frames/{safe_name}",
                 }
             )
+            if limit is not None and len(frames) >= limit:
+                break
         return jsonify(frames)
 
     @app.get("/api/frames/<path:name>")
@@ -324,17 +462,255 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
         jpg_exists = config.timelapse_output_path.exists()
         gif_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".gif")
         gif_exists = gif_path.exists()
+        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+        mp4_exists = mp4_path.exists()
 
         return jsonify(
             {
                 "jpg_exists": jpg_exists,
                 "gif_exists": gif_exists,
+                "mp4_exists": mp4_exists,
                 "jpg_url": "/api/timelapse/file",
                 "gif_url": "/api/timelapse/file/gif",
+                "mp4_url": "/api/timelapse/file/mp4",
                 "jpg_name": config.timelapse_output_path.name,
                 "gif_name": gif_path.name,
+                "mp4_name": mp4_path.name,
             }
         )
+
+    @app.get("/api/timelapse/exports/dates")
+    def api_timelapse_export_dates() -> Response:
+        """List available daily export dates and summary file counts."""
+
+        export_root = config.daily_export_dir
+        export_root.mkdir(parents=True, exist_ok=True)
+
+        dates: list[dict[str, object]] = []
+        for day_dir in sorted((path for path in export_root.iterdir() if path.is_dir()), reverse=True):
+            try:
+                datetime.strptime(day_dir.name, "%Y-%m-%d")
+            except ValueError:
+                continue
+
+            files = [path for path in day_dir.iterdir() if path.is_file()]
+            has_jpg = any(path.name.endswith(".jpg") for path in files)
+            has_gif = any(path.name.endswith(".gif") for path in files)
+            has_mp4 = any(path.name.endswith(".mp4") for path in files)
+            dates.append(
+                {
+                    "date": day_dir.name,
+                    "file_count": len(files),
+                    "has_jpg": has_jpg,
+                    "has_gif": has_gif,
+                    "has_mp4": has_mp4,
+                }
+            )
+
+        return jsonify(dates)
+
+    @app.get("/api/timelapse/exports")
+    def api_timelapse_exports_for_date() -> Response:
+        """List timelapse export files for a specific date folder."""
+
+        date_value = request.args.get("date", "").strip()
+        if not date_value:
+            return jsonify({"ok": False, "error": "date query parameter is required"}), 400
+        try:
+            datetime.strptime(date_value, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"ok": False, "error": "date must be in YYYY-MM-DD format"}), 400
+
+        day_dir = config.daily_export_dir / date_value
+        if not day_dir.exists() or not day_dir.is_dir():
+            return jsonify([])
+
+        files = []
+        for file_path in sorted((path for path in day_dir.iterdir() if path.is_file())):
+            relative_path = f"{date_value}/{file_path.name}"
+            files.append(
+                {
+                    "name": file_path.name,
+                    "date": date_value,
+                    "size_kb": round(file_path.stat().st_size / 1024.0, 1),
+                    "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat(),
+                    "url": f"/api/timelapse/exports/file/{relative_path}",
+                }
+            )
+
+        return jsonify(files)
+
+    @app.get("/api/timelapse/exports/file/<path:relative_path>")
+    def api_timelapse_export_file(relative_path: str) -> Response:
+        """Serve a specific file from a dated daily timelapse export folder."""
+
+        try:
+            file_path = _safe_export_file_path(config.daily_export_dir, relative_path)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        if not file_path.exists() or not file_path.is_file():
+            return jsonify({"ok": False, "error": "Export file not found"}), 404
+
+        suffix = file_path.suffix.lower()
+        if suffix == ".jpg":
+            mimetype = "image/jpeg"
+        elif suffix == ".gif":
+            mimetype = "image/gif"
+        elif suffix == ".mp4":
+            mimetype = "video/mp4"
+        else:
+            mimetype = "application/octet-stream"
+
+        return send_file(file_path, mimetype=mimetype)
+
+    @app.post("/api/timelapse/exports/merge/start")
+    def api_timelapse_export_merge_start() -> Response:
+        """Start async merge job for daily MP4 exports in a date range."""
+
+        payload = request.get_json(silent=True) or {}
+        start_value = str(payload.get("start", "")).strip()
+        end_value = str(payload.get("end", "")).strip()
+        if not start_value or not end_value:
+            return jsonify({"ok": False, "error": "start and end are required"}), 400
+
+        try:
+            start_date = datetime.strptime(start_value, "%Y-%m-%d").date()
+            end_date = datetime.strptime(end_value, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"ok": False, "error": "start and end must be in YYYY-MM-DD format"}), 400
+
+        if end_date < start_date:
+            return jsonify({"ok": False, "error": "end date must be on or after start date"}), 400
+
+        current_merge = state.get_merge_job()
+        if current_merge.get("status") == "running":
+            return jsonify({"ok": False, "error": "A merge job is already running", **current_merge}), 409
+
+        selected_videos: list[Path] = []
+        current = start_date
+        while current <= end_date:
+            day_dir = config.daily_export_dir / current.isoformat()
+            day_mp4 = day_dir / "timelapse.jpg.mp4"
+            if day_mp4.exists():
+                selected_videos.append(day_mp4)
+            current += timedelta(days=1)
+
+        if not selected_videos:
+            return jsonify({"ok": False, "error": "No MP4 exports found in selected range"}), 404
+
+        merged_dir = config.daily_export_dir / "_merged"
+        merged_dir.mkdir(parents=True, exist_ok=True)
+        job_id = uuid4().hex[:12]
+        merged_name = f"timelapse_{start_date.isoformat()}_to_{end_date.isoformat()}_{job_id}.mp4"
+        merged_path = merged_dir / merged_name
+
+        state.set_merge_job(
+            {
+                "job_id": job_id,
+                "status": "running",
+                "message": "Starting merge",
+                "progress": 0,
+                "start": start_date.isoformat(),
+                "end": end_date.isoformat(),
+                "video_count": len(selected_videos),
+                "download_url": None,
+                "output_path": str(merged_path),
+            }
+        )
+
+        def merge_job() -> None:
+            if len(selected_videos) == 1:
+                state.update_merge_job(
+                    {
+                        "message": f"Using single source video: {selected_videos[0].name}",
+                        "progress": 90,
+                    }
+                )
+                merged_path.write_bytes(selected_videos[0].read_bytes())
+                state.update_merge_job(
+                    {
+                        "status": "completed",
+                        "message": "Merge complete",
+                        "progress": 100,
+                        "download_url": f"/api/timelapse/exports/merge/download/{job_id}",
+                    }
+                )
+                return
+
+            def on_started(index: int, total: int, path: Path) -> None:
+                percent = max(1, int(((index - 1) / total) * 90))
+                state.update_merge_job(
+                    {
+                        "message": f"Merging {index}/{total}: {path.name}",
+                        "progress": percent,
+                    }
+                )
+
+            def on_completed(index: int, total: int, path: Path) -> None:
+                percent = max(5, int((index / total) * 95))
+                state.update_merge_job(
+                    {
+                        "message": f"Merged {index}/{total}: {path.name}",
+                        "progress": percent,
+                    }
+                )
+
+            try:
+                _stitch_mp4_files(
+                    selected_videos,
+                    merged_path,
+                    on_video_started=on_started,
+                    on_video_completed=on_completed,
+                )
+                state.update_merge_job(
+                    {
+                        "status": "completed",
+                        "message": "Merge complete",
+                        "progress": 100,
+                        "download_url": f"/api/timelapse/exports/merge/download/{job_id}",
+                    }
+                )
+            except Exception as exc:
+                LOGGER.exception("Date-range MP4 merge failed")
+                state.update_merge_job(
+                    {
+                        "status": "error",
+                        "message": f"Merge failed: {exc}",
+                        "progress": 0,
+                        "download_url": None,
+                    }
+                )
+
+        threading.Thread(target=merge_job, name=f"timelapse-merge-{job_id}", daemon=True).start()
+
+        return jsonify({"ok": True, **state.get_merge_job()})
+
+    @app.get("/api/timelapse/exports/merge/status")
+    def api_timelapse_export_merge_status() -> Response:
+        """Return current async stitched export merge job state."""
+
+        return jsonify(state.get_merge_job())
+
+    @app.get("/api/timelapse/exports/merge/download/<job_id>")
+    def api_timelapse_export_merge_download(job_id: str) -> Response:
+        """Download completed stitched MP4 by merge job id."""
+
+        merge_job = state.get_merge_job()
+        if merge_job.get("job_id") != job_id:
+            return jsonify({"ok": False, "error": "Merge job not found"}), 404
+        if merge_job.get("status") != "completed":
+            return jsonify({"ok": False, "error": "Merge job is not completed"}), 409
+
+        output_path_value = merge_job.get("output_path")
+        if not output_path_value:
+            return jsonify({"ok": False, "error": "Merged output path missing"}), 500
+
+        output_path = Path(str(output_path_value))
+        if not output_path.exists():
+            return jsonify({"ok": False, "error": "Merged output not found"}), 404
+
+        return send_file(output_path, mimetype="video/mp4", as_attachment=True, download_name=output_path.name)
 
     @app.get("/api/timelapse/file")
     def api_timelapse_file() -> Response:
@@ -352,6 +728,24 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
         if not gif_path.exists():
             return jsonify({"ok": False, "error": "Timelapse GIF not found"}), 404
         return send_file(gif_path, mimetype="image/gif")
+
+    @app.get("/api/timelapse/file/mp4")
+    def api_timelapse_file_mp4() -> Response:
+        """Serve generated timelapse MP4 when available."""
+
+        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+        if not mp4_path.exists():
+            return jsonify({"ok": False, "error": "Timelapse MP4 not found"}), 404
+        return send_file(mp4_path, mimetype="video/mp4")
+
+    @app.get("/api/timelapse/file/mp4/download")
+    def api_timelapse_file_mp4_download() -> Response:
+        """Download generated timelapse MP4 as an attachment."""
+
+        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+        if not mp4_path.exists():
+            return jsonify({"ok": False, "error": "Timelapse MP4 not found"}), 404
+        return send_file(mp4_path, mimetype="video/mp4", as_attachment=True, download_name=mp4_path.name)
 
     @app.post("/api/timelapse/generate")
     def api_timelapse_generate() -> Response:

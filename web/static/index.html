@@ -180,8 +180,86 @@
     }
 
     .frames-head { display: flex; justify-content: space-between; align-items: center; }
+    .frames-head-actions { display: flex; align-items: center; gap: 8px; }
     .timelapse-actions { display: flex; gap: 8px; }
     .timelapse-actions .btn { flex: 1; }
+    .export-browser {
+      display: grid;
+      gap: 8px;
+      margin-top: 6px;
+      border: 1px solid #2a3034;
+      border-radius: 8px;
+      padding: 8px;
+      background: #11161a;
+    }
+    .export-browser label {
+      font-size: 11px;
+    }
+    #exportDateSelect {
+      width: 100%;
+      background: #0f1315;
+      color: var(--text);
+      border: 1px solid #2a3035;
+      border-radius: 6px;
+      padding: 7px;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    #exportStartDateSelect,
+    #exportEndDateSelect {
+      width: 100%;
+      background: #0f1315;
+      color: var(--text);
+      border: 1px solid #2a3035;
+      border-radius: 6px;
+      padding: 7px;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    #exportFileList {
+      display: grid;
+      gap: 6px;
+      max-height: 140px;
+      overflow: auto;
+      padding-right: 3px;
+    }
+    .export-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #2a3034;
+      border-radius: 6px;
+      padding: 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .merge-status {
+      display: grid;
+      gap: 5px;
+      border: 1px solid #2a3034;
+      border-radius: 6px;
+      padding: 6px;
+      background: #0f1315;
+    }
+    #mergeStatusText {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .merge-progress {
+      width: 100%;
+      height: 8px;
+      background: #1d2327;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid #2a3035;
+    }
+    #mergeProgressBar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #f5a623, #00c8b4);
+      transition: width 200ms ease;
+    }
     #frameCountBadge {
       border: 1px solid #2b3237;
       border-radius: 999px;
@@ -344,6 +422,15 @@
       .timelapse-actions .btn {
         width: 100%;
       }
+      .frames-head {
+        flex-wrap: wrap;
+      }
+      .frames-head-actions {
+        width: 100%;
+      }
+      .frames-head-actions .btn {
+        width: 100%;
+      }
       .thumb-grid {
         grid-template-columns: 1fr 1fr;
         max-height: 320px;
@@ -432,15 +519,37 @@
 
     <section class="panel right">
       <div class="frames-head">
-        <h3>Frames & Timelapse</h3>
-        <span id="frameCountBadge">0</span>
+        <div class="frames-head-actions">
+          <h3>Frames & Timelapse</h3>
+          <span id="frameCountBadge">0</span>
+        </div>
+        <a href="/viewer" class="btn">Open Image Viewer</a>
       </div>
       <button id="timelapseBtn" class="btn">Generate Timelapse<span id="timelapseSpin" style="display:none" class="spinner"></span></button>
       <div class="row timelapse-actions">
         <button id="viewTimelapseBtn" class="btn" disabled>View Timelapse File</button>
         <button id="viewTimelapseGifBtn" class="btn" disabled>View GIF</button>
+        <button id="viewTimelapseMp4Btn" class="btn" disabled>View MP4</button>
       </div>
       <img id="timelapsePreview" alt="Timelapse preview" style="display:none;width:100%;border:1px solid #2a3035;border-radius:8px;cursor:pointer;" />
+      <div class="export-browser">
+        <label for="exportDateSelect">Daily Exports By Date</label>
+        <div class="row">
+          <select id="exportDateSelect"></select>
+          <button id="refreshExportsBtn" class="btn">Refresh</button>
+        </div>
+        <label>Stitch MP4 Date Range</label>
+        <div class="row">
+          <select id="exportStartDateSelect"></select>
+          <select id="exportEndDateSelect"></select>
+        </div>
+        <button id="downloadMergedMp4Btn" class="btn" disabled>Download Stitched MP4</button>
+        <div class="merge-status">
+          <div id="mergeStatusText">No merge job started</div>
+          <div class="merge-progress"><div id="mergeProgressBar"></div></div>
+        </div>
+        <div id="exportFileList"></div>
+      </div>
       <button id="clearFramesBtn" class="btn">Clear All Frames</button>
       <div id="thumbGrid" class="thumb-grid"></div>
     </section>
@@ -469,6 +578,8 @@
       maxLogLines: 200,
       streamHealthy: true,
       timelapsePollHandle: null,
+      mergePollHandle: null,
+      mergeAutoDownloadJobId: null,
     };
 
     function formatUptime(totalSeconds) {
@@ -683,17 +794,194 @@
       const preview = document.getElementById('timelapsePreview');
       const viewBtn = document.getElementById('viewTimelapseBtn');
       const viewGifBtn = document.getElementById('viewTimelapseGifBtn');
+      const viewMp4Btn = document.getElementById('viewTimelapseMp4Btn');
+      const exportDateSelect = document.getElementById('exportDateSelect');
+      const exportStartDateSelect = document.getElementById('exportStartDateSelect');
+      const exportEndDateSelect = document.getElementById('exportEndDateSelect');
+      const refreshExportsBtn = document.getElementById('refreshExportsBtn');
+      const downloadMergedMp4Btn = document.getElementById('downloadMergedMp4Btn');
+      const mergeStatusText = document.getElementById('mergeStatusText');
+      const mergeProgressBar = document.getElementById('mergeProgressBar');
+      const exportFileList = document.getElementById('exportFileList');
       const lightbox = document.getElementById('lightbox');
       const lightboxImg = document.getElementById('lightboxImg');
+
+      const syncMergeDownloadState = () => {
+        const start = exportStartDateSelect.value;
+        const end = exportEndDateSelect.value;
+        downloadMergedMp4Btn.disabled = !start || !end || start > end;
+      };
+
+      const renderMergeStatus = (job) => {
+        const status = job?.status || 'idle';
+        const message = job?.message || 'No merge job started';
+        const progress = Math.max(0, Math.min(100, Number(job?.progress || 0)));
+
+        mergeStatusText.textContent = `${status.toUpperCase()}: ${message}`;
+        mergeProgressBar.style.width = `${progress}%`;
+
+        if (status === 'completed' && job.download_url) {
+          mergeStatusText.textContent = `COMPLETED: ${message}`;
+        }
+      };
+
+      const pollMergeStatus = async () => {
+        try {
+          const job = await api('/api/timelapse/exports/merge/status');
+          renderMergeStatus(job);
+
+          if (job.status === 'completed') {
+            if (state.mergePollHandle) {
+              clearInterval(state.mergePollHandle);
+              state.mergePollHandle = null;
+            }
+            downloadMergedMp4Btn.disabled = false;
+            if (job.download_url && state.mergeAutoDownloadJobId === job.job_id) {
+              window.open(job.download_url, '_blank', 'noopener');
+              state.mergeAutoDownloadJobId = null;
+            }
+            showToast('Stitched MP4 ready', 'success');
+          } else if (job.status === 'error') {
+            if (state.mergePollHandle) {
+              clearInterval(state.mergePollHandle);
+              state.mergePollHandle = null;
+            }
+            state.mergeAutoDownloadJobId = null;
+            syncMergeDownloadState();
+            showToast(job.message || 'Merge failed', 'error');
+          }
+        } catch (err) {
+          showToast(`Merge status failed: ${err.message}`, 'warning');
+        }
+      };
+
+      const renderExportFiles = (files) => {
+        exportFileList.innerHTML = '';
+        if (!files.length) {
+          const empty = document.createElement('div');
+          empty.className = 'metric';
+          empty.textContent = 'No exports found for selected date';
+          exportFileList.appendChild(empty);
+          return;
+        }
+
+        files.forEach((entry) => {
+          const row = document.createElement('div');
+          row.className = 'export-item';
+
+          const name = document.createElement('span');
+          name.textContent = `${entry.name} (${entry.size_kb} KB)`;
+
+          const button = document.createElement('button');
+          button.className = 'btn';
+          button.textContent = 'Open';
+          button.addEventListener('click', () => {
+            window.open(entry.url, '_blank', 'noopener');
+          });
+
+          row.appendChild(name);
+          row.appendChild(button);
+          exportFileList.appendChild(row);
+        });
+      };
+
+      const loadExportDates = async () => {
+        try {
+          const dates = await api('/api/timelapse/exports/dates');
+          const previousSingleDate = exportDateSelect.value;
+          const previousStartDate = exportStartDateSelect.value;
+          const previousEndDate = exportEndDateSelect.value;
+
+          exportDateSelect.innerHTML = '';
+          exportStartDateSelect.innerHTML = '';
+          exportEndDateSelect.innerHTML = '';
+
+          if (!dates.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No daily exports';
+            exportDateSelect.appendChild(option);
+
+            const emptyStartOption = document.createElement('option');
+            emptyStartOption.value = '';
+            emptyStartOption.textContent = 'No start date';
+            exportStartDateSelect.appendChild(emptyStartOption);
+
+            const emptyEndOption = document.createElement('option');
+            emptyEndOption.value = '';
+            emptyEndOption.textContent = 'No end date';
+            exportEndDateSelect.appendChild(emptyEndOption);
+
+            renderExportFiles([]);
+            syncMergeDownloadState();
+            return;
+          }
+
+          dates.forEach((item) => {
+            const option = document.createElement('option');
+            option.value = item.date;
+            option.textContent = `${item.date} (${item.file_count} files)`;
+            exportDateSelect.appendChild(option);
+
+            const startOption = document.createElement('option');
+            startOption.value = item.date;
+            startOption.textContent = item.date;
+            exportStartDateSelect.appendChild(startOption);
+
+            const endOption = document.createElement('option');
+            endOption.value = item.date;
+            endOption.textContent = item.date;
+            exportEndDateSelect.appendChild(endOption);
+          });
+
+          if (previousSingleDate && dates.some((item) => item.date === previousSingleDate)) {
+            exportDateSelect.value = previousSingleDate;
+          }
+          if (previousStartDate && dates.some((item) => item.date === previousStartDate)) {
+            exportStartDateSelect.value = previousStartDate;
+          }
+          if (previousEndDate && dates.some((item) => item.date === previousEndDate)) {
+            exportEndDateSelect.value = previousEndDate;
+          }
+
+          if (!exportStartDateSelect.value) {
+            exportStartDateSelect.value = dates[dates.length - 1].date;
+          }
+          if (!exportEndDateSelect.value) {
+            exportEndDateSelect.value = dates[0].date;
+          }
+
+          syncMergeDownloadState();
+          await loadExportFilesForSelectedDate();
+        } catch (err) {
+          showToast(`Export dates failed: ${err.message}`, 'warning');
+        }
+      };
+
+      const loadExportFilesForSelectedDate = async () => {
+        const selectedDate = exportDateSelect.value;
+        if (!selectedDate) {
+          renderExportFiles([]);
+          return;
+        }
+        try {
+          const files = await api(`/api/timelapse/exports?date=${encodeURIComponent(selectedDate)}`);
+          renderExportFiles(files);
+        } catch (err) {
+          showToast(`Export files failed: ${err.message}`, 'warning');
+        }
+      };
 
       const syncTimelapseButtons = async () => {
         try {
           const info = await api('/api/timelapse');
           viewBtn.disabled = !info.jpg_exists;
           viewGifBtn.disabled = !info.gif_exists;
+          viewMp4Btn.disabled = !info.mp4_exists;
         } catch (_) {
           viewBtn.disabled = true;
           viewGifBtn.disabled = true;
+          viewMp4Btn.disabled = true;
         }
       };
 
@@ -701,6 +989,7 @@
         preview.style.display = 'none';
         preview.src = `/api/timelapse/preview?t=${Date.now()}`;
         await syncTimelapseButtons();
+        await loadExportDates();
       };
 
       preview.addEventListener('load', () => {
@@ -720,6 +1009,58 @@
 
       viewGifBtn.addEventListener('click', () => {
         window.open('/api/timelapse/file/gif', '_blank', 'noopener');
+      });
+
+      viewMp4Btn.addEventListener('click', () => {
+        window.open('/api/timelapse/file/mp4', '_blank', 'noopener');
+      });
+
+      exportDateSelect.addEventListener('change', () => {
+        loadExportFilesForSelectedDate();
+      });
+
+      refreshExportsBtn.addEventListener('click', () => {
+        loadExportDates();
+        pollMergeStatus();
+      });
+
+      exportStartDateSelect.addEventListener('change', () => {
+        syncMergeDownloadState();
+      });
+
+      exportEndDateSelect.addEventListener('change', () => {
+        syncMergeDownloadState();
+      });
+
+      downloadMergedMp4Btn.addEventListener('click', () => {
+        const start = exportStartDateSelect.value;
+        const end = exportEndDateSelect.value;
+        if (!start || !end) {
+          showToast('Select both start and end dates', 'warning');
+          return;
+        }
+        if (start > end) {
+          showToast('Start date must be before end date', 'warning');
+          return;
+        }
+
+        downloadMergedMp4Btn.disabled = true;
+        mergeStatusText.textContent = 'RUNNING: Starting merge...';
+        mergeProgressBar.style.width = '0%';
+
+        api('/api/timelapse/exports/merge/start', {
+          method: 'POST',
+          body: JSON.stringify({ start, end }),
+        }).then((job) => {
+          state.mergeAutoDownloadJobId = job.job_id || null;
+          renderMergeStatus(job);
+          if (!state.mergePollHandle) {
+            state.mergePollHandle = setInterval(pollMergeStatus, 1500);
+          }
+        }).catch((err) => {
+          syncMergeDownloadState();
+          showToast(`Merge start failed: ${err.message}`, 'error');
+        });
       });
 
       const pollJob = async () => {
@@ -761,6 +1102,8 @@
 
       loadPreview();
       setInterval(syncTimelapseButtons, 8000);
+      setInterval(loadExportDates, 30000);
+      pollMergeStatus();
     }
 
     /*

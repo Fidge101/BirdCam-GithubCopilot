@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import cv2
 
 from camera import CameraStream
 from config import AppConfig
+from timelapse import generate_daily_timelapse_export
 
 
 LOGGER = logging.getLogger(__name__)
@@ -82,6 +83,45 @@ def _capture_loop(camera_stream: CameraStream, config: AppConfig, stop_event: th
     LOGGER.info("Capture scheduler stopped")
 
 
+def _daily_export_loop(config: AppConfig, stop_event: threading.Event) -> None:
+    """Generate a dated timelapse export once per day at configured local time."""
+
+    if not config.daily_export_enabled:
+        LOGGER.info("Daily timelapse export scheduler is disabled")
+        return
+
+    export_hour, export_minute = (int(part) for part in config.daily_export_time.split(":", 1))
+    last_run_date = None
+
+    LOGGER.info(
+        "Daily timelapse export scheduler started at %s (output dir: %s)",
+        config.daily_export_time,
+        config.daily_export_dir,
+    )
+
+    while not stop_event.is_set():
+        now = datetime.now()
+        if (now.hour, now.minute) >= (export_hour, export_minute) and last_run_date != now.date():
+            target_date = now.date() - timedelta(days=1)
+            try:
+                output_path = generate_daily_timelapse_export(
+                    config.frame_store_dir,
+                    config.daily_export_dir,
+                    target_date,
+                    columns=10,
+                )
+                LOGGER.info("Daily timelapse export generated for %s -> %s", target_date.isoformat(), output_path)
+            except ValueError as exc:
+                LOGGER.warning("Daily export skipped for %s: %s", target_date.isoformat(), exc)
+            except Exception:  # pragma: no cover - defensive guard
+                LOGGER.exception("Daily export failed for %s", target_date.isoformat())
+            last_run_date = now.date()
+
+        stop_event.wait(30)
+
+    LOGGER.info("Daily timelapse export scheduler stopped")
+
+
 def run_scheduler(
     camera_stream: CameraStream,
     config: AppConfig,
@@ -103,4 +143,13 @@ def run_scheduler(
         daemon=True,
     )
     worker.start()
+
+    daily_worker = threading.Thread(
+        target=_daily_export_loop,
+        args=(config, stop_event),
+        name="daily-timelapse-export-scheduler",
+        daemon=True,
+    )
+    daily_worker.start()
+
     return worker
