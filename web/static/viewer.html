@@ -112,8 +112,10 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 8px;
-      overflow: auto;
+      overflow-y: auto;
+      overflow-x: hidden;
       max-height: 62vh;
+      align-content: start;
       padding-right: 4px;
     }
 
@@ -133,7 +135,7 @@
     .thumb img {
       width: 100%;
       aspect-ratio: 16 / 9;
-      object-fit: cover;
+      object-fit: contain;
       display: block;
       background: #0b0d0f;
     }
