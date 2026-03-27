@@ -36,6 +36,7 @@ class AppConfig:
     stream_quality: int
     port: int
     log_file_path: Path
+    env_path: Path
 
 
 def _require_env(name: str) -> str:
@@ -58,18 +59,32 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     per device without editing source code.
     """
 
+    env_path = Path(env_path)
+    env_dir = env_path.expanduser().resolve().parent
     load_dotenv(dotenv_path=env_path)
 
     camera_ip = _require_env("CAMERA_IP")
     camera_user = _require_env("CAMERA_USER")
     camera_pass = _require_env("CAMERA_PASS")
     capture_interval_seconds = int(_require_env("CAPTURE_INTERVAL_SECONDS"))
-    timelapse_output_path = Path(_require_env("TIMELAPSE_OUTPUT_PATH"))
-    frame_store_dir = Path(_require_env("FRAME_STORE_DIR"))
+    timelapse_output_path_raw = Path(_require_env("TIMELAPSE_OUTPUT_PATH"))
+    frame_store_dir_raw = Path(_require_env("FRAME_STORE_DIR"))
     max_frames = int(_require_env("MAX_FRAMES"))
     stream_quality = int(os.getenv("STREAM_QUALITY", "80"))
     port = int(os.getenv("PORT", "5000"))
-    log_file_path = Path(os.getenv("LOG_FILE_PATH", "./birdcam.log"))
+    log_file_path_raw = Path(os.getenv("LOG_FILE_PATH", "./birdcam.log"))
+
+    timelapse_output_path = (
+        timelapse_output_path_raw
+        if timelapse_output_path_raw.is_absolute()
+        else (env_dir / timelapse_output_path_raw)
+    ).resolve()
+    frame_store_dir = (
+        frame_store_dir_raw if frame_store_dir_raw.is_absolute() else (env_dir / frame_store_dir_raw)
+    ).resolve()
+    log_file_path = (
+        log_file_path_raw if log_file_path_raw.is_absolute() else (env_dir / log_file_path_raw)
+    ).resolve()
 
     if capture_interval_seconds <= 0:
         raise ValueError("CAPTURE_INTERVAL_SECONDS must be greater than zero")
@@ -102,4 +117,5 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         stream_quality=stream_quality,
         port=port,
         log_file_path=log_file_path,
+        env_path=env_path.expanduser().resolve(),
     )

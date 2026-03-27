@@ -82,6 +82,7 @@
       transition: all var(--transition);
       font-family: inherit;
       font-size: 12px;
+      min-height: 36px;
     }
     .btn:hover { border-color: var(--amber); color: var(--amber); }
     .btn.primary { background: rgba(245,166,35,.1); border-color: var(--amber); color: var(--amber); }
@@ -179,6 +180,8 @@
     }
 
     .frames-head { display: flex; justify-content: space-between; align-items: center; }
+    .timelapse-actions { display: flex; gap: 8px; }
+    .timelapse-actions .btn { flex: 1; }
     #frameCountBadge {
       border: 1px solid #2b3237;
       border-radius: 999px;
@@ -304,9 +307,85 @@
     @keyframes spin { to { transform: rotate(360deg);} }
 
     @media (max-width: 1200px) {
-      .dash { grid-template-columns: 1fr; grid-template-rows: auto auto auto; overflow: auto; }
-      body { overflow: auto; }
+      body {
+        height: auto;
+        min-height: 100vh;
+        overflow: auto;
+        grid-template-rows: auto auto;
+      }
+      .dash {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+        overflow: visible;
+      }
       .feed-wrap { min-height: 340px; }
+    }
+
+    @media (max-width: 900px) {
+      .dash {
+        padding: 10px;
+        gap: 10px;
+      }
+      .panel {
+        padding: 10px;
+      }
+      .row {
+        flex-wrap: wrap;
+      }
+      .row .btn,
+      .row button,
+      .row input,
+      .row span {
+        width: 100%;
+      }
+      .timelapse-actions {
+        flex-direction: column;
+      }
+      .timelapse-actions .btn {
+        width: 100%;
+      }
+      .thumb-grid {
+        grid-template-columns: 1fr 1fr;
+        max-height: 320px;
+      }
+      .bottom {
+        padding: 8px 10px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      h2 { font-size: 1.1rem; }
+      h3 { font-size: 1rem; }
+      .metric,
+      label,
+      .btn,
+      .status-badge,
+      .feed-label,
+      .watermark {
+        font-size: 11px;
+      }
+      .btn {
+        min-height: 40px;
+        padding: 10px;
+      }
+      .feed-wrap {
+        min-height: 240px;
+      }
+      .thumb-grid {
+        grid-template-columns: 1fr;
+        max-height: 280px;
+      }
+      #logOutput {
+        max-height: 180px;
+      }
+      #toastArea {
+        left: 10px;
+        right: 10px;
+      }
+      .toast {
+        min-width: 0;
+        width: 100%;
+      }
     }
   </style>
 </head>
@@ -357,6 +436,10 @@
         <span id="frameCountBadge">0</span>
       </div>
       <button id="timelapseBtn" class="btn">Generate Timelapse<span id="timelapseSpin" style="display:none" class="spinner"></span></button>
+      <div class="row timelapse-actions">
+        <button id="viewTimelapseBtn" class="btn" disabled>View Timelapse File</button>
+        <button id="viewTimelapseGifBtn" class="btn" disabled>View GIF</button>
+      </div>
       <img id="timelapsePreview" alt="Timelapse preview" style="display:none;width:100%;border:1px solid #2a3035;border-radius:8px;cursor:pointer;" />
       <button id="clearFramesBtn" class="btn">Clear All Frames</button>
       <div id="thumbGrid" class="thumb-grid"></div>
@@ -537,7 +620,8 @@
             card.className = 'thumb';
 
             const image = document.createElement('img');
-            image.src = `/api/frames/${encodeURIComponent(frame.filename)}`;
+            const frameUrl = frame.url || `/api/frames/${encodeURIComponent(frame.filename)}`;
+            image.src = frameUrl;
             image.alt = frame.filename;
             image.addEventListener('click', () => openLightbox(image.src));
 
@@ -597,12 +681,26 @@
       const btn = document.getElementById('timelapseBtn');
       const spin = document.getElementById('timelapseSpin');
       const preview = document.getElementById('timelapsePreview');
+      const viewBtn = document.getElementById('viewTimelapseBtn');
+      const viewGifBtn = document.getElementById('viewTimelapseGifBtn');
       const lightbox = document.getElementById('lightbox');
       const lightboxImg = document.getElementById('lightboxImg');
+
+      const syncTimelapseButtons = async () => {
+        try {
+          const info = await api('/api/timelapse');
+          viewBtn.disabled = !info.jpg_exists;
+          viewGifBtn.disabled = !info.gif_exists;
+        } catch (_) {
+          viewBtn.disabled = true;
+          viewGifBtn.disabled = true;
+        }
+      };
 
       const loadPreview = async () => {
         preview.style.display = 'none';
         preview.src = `/api/timelapse/preview?t=${Date.now()}`;
+        await syncTimelapseButtons();
       };
 
       preview.addEventListener('load', () => {
@@ -612,8 +710,16 @@
         preview.style.display = 'none';
       });
       preview.addEventListener('click', () => {
-        lightboxImg.src = preview.src;
+        lightboxImg.src = `/api/timelapse/preview?t=${Date.now()}`;
         lightbox.style.display = 'grid';
+      });
+
+      viewBtn.addEventListener('click', () => {
+        window.open('/api/timelapse/file', '_blank', 'noopener');
+      });
+
+      viewGifBtn.addEventListener('click', () => {
+        window.open('/api/timelapse/file/gif', '_blank', 'noopener');
       });
 
       const pollJob = async () => {
@@ -654,6 +760,7 @@
       });
 
       loadPreview();
+      setInterval(syncTimelapseButtons, 8000);
     }
 
     /*

@@ -60,6 +60,41 @@ cd ~/BirdCam-GithubCopilot
 git pull
 ```
 
+## Update Raspberry Pi To Latest Repo Version
+
+Use this whenever you want the newest code from GitHub on your Pi:
+
+```bash
+cd ~/BirdCam-GithubCopilot
+git fetch origin
+git pull --ff-only origin main
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+If `git pull --ff-only` fails because of local edits, either commit your changes or discard them before pulling:
+
+```bash
+cd ~/BirdCam-GithubCopilot
+git status
+# Option A: keep your work
+git add .
+git commit -m "WIP local changes"
+git pull origin main
+
+# Option B: discard local changes (destructive)
+git reset --hard HEAD
+git clean -fd
+git pull origin main
+```
+
+Then restart BirdCam in your preferred mode, for example:
+
+```bash
+source .venv/bin/activate
+python main.py --web
+```
+
 ## Raspberry Pi Setup
 
 Create and activate a virtual environment, then install system and Python dependencies:

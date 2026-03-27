@@ -260,16 +260,18 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
         frames = []
         for frame_path in sorted(config.frame_store_dir.glob("*.jpg"), reverse=True):
             stat = frame_path.stat()
+            safe_name = frame_path.name
             frames.append(
                 {
-                    "filename": frame_path.name,
-                    "timestamp": _timestamp_from_filename(frame_path.name, frame_path),
+                    "filename": safe_name,
+                    "timestamp": _timestamp_from_filename(safe_name, frame_path),
                     "size_kb": round(stat.st_size / 1024.0, 1),
+                    "url": f"/api/frames/{safe_name}",
                 }
             )
         return jsonify(frames)
 
-    @app.get("/api/frames/<name>")
+    @app.get("/api/frames/<path:name>")
     def api_frame_get(name: str) -> Response:
         """Serve one captured frame image by filename."""
 
@@ -280,9 +282,9 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
 
         if not frame_path.exists():
             return jsonify({"ok": False, "error": "Frame not found"}), 404
-        return send_file(frame_path)
+        return send_file(frame_path, mimetype="image/jpeg")
 
-    @app.delete("/api/frames/<name>")
+    @app.delete("/api/frames/<path:name>")
     def api_frame_delete(name: str) -> Response:
         """Delete one captured frame image by filename."""
 
@@ -313,7 +315,43 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
 
         if not config.timelapse_output_path.exists():
             return jsonify({"ok": False, "error": "Timelapse preview not found"}), 404
-        return send_file(config.timelapse_output_path)
+        return send_file(config.timelapse_output_path, mimetype="image/jpeg")
+
+    @app.get("/api/timelapse")
+    def api_timelapse_meta() -> Response:
+        """Return timelapse file metadata and direct view/download URLs."""
+
+        jpg_exists = config.timelapse_output_path.exists()
+        gif_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".gif")
+        gif_exists = gif_path.exists()
+
+        return jsonify(
+            {
+                "jpg_exists": jpg_exists,
+                "gif_exists": gif_exists,
+                "jpg_url": "/api/timelapse/file",
+                "gif_url": "/api/timelapse/file/gif",
+                "jpg_name": config.timelapse_output_path.name,
+                "gif_name": gif_path.name,
+            }
+        )
+
+    @app.get("/api/timelapse/file")
+    def api_timelapse_file() -> Response:
+        """Serve the generated timelapse contact sheet file for direct viewing."""
+
+        if not config.timelapse_output_path.exists():
+            return jsonify({"ok": False, "error": "Timelapse file not found"}), 404
+        return send_file(config.timelapse_output_path, mimetype="image/jpeg")
+
+    @app.get("/api/timelapse/file/gif")
+    def api_timelapse_file_gif() -> Response:
+        """Serve generated timelapse GIF when available."""
+
+        gif_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".gif")
+        if not gif_path.exists():
+            return jsonify({"ok": False, "error": "Timelapse GIF not found"}), 404
+        return send_file(gif_path, mimetype="image/gif")
 
     @app.post("/api/timelapse/generate")
     def api_timelapse_generate() -> Response:
@@ -373,7 +411,7 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
         config.capture_interval_seconds = capture_interval
         config.max_frames = max_frames
         _update_env_file(
-            Path(".env"),
+            config.env_path,
             {
                 "CAPTURE_INTERVAL_SECONDS": str(capture_interval),
                 "MAX_FRAMES": str(max_frames),
