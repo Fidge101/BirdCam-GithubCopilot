@@ -37,6 +37,31 @@ def _delete_oldest_frames(frame_dir: Path, max_frames: int) -> None:
         LOGGER.info("Deleted old frame %s to enforce retention limit", frame_path)
 
 
+def capture_single_frame(camera_stream: CameraStream, config: AppConfig) -> Path | None:
+    """Capture one frame immediately, enforce retention, and return the saved path.
+
+    This helper is reused by both the scheduler loop and web API so manual and
+    periodic captures follow the same naming, retention, and logging behavior.
+    """
+
+    frame = camera_stream.read_frame()
+    if frame is None:
+        LOGGER.warning("Capture skipped because no frame was available")
+        return None
+
+    timestamp = datetime.now()
+    filename = timestamp.strftime("%Y%m%d_%H%M%S.jpg")
+    output_path = config.frame_store_dir / filename
+
+    if cv2.imwrite(str(output_path), frame):
+        LOGGER.info("Captured frame at %s -> %s", timestamp.isoformat(), output_path)
+        _delete_oldest_frames(config.frame_store_dir, config.max_frames)
+        return output_path
+
+    LOGGER.error("Failed to save frame to %s", output_path)
+    return None
+
+
 def _capture_loop(camera_stream: CameraStream, config: AppConfig, stop_event: threading.Event) -> None:
     """Capture frames at a fixed interval until the stop event is set.
 
@@ -50,19 +75,7 @@ def _capture_loop(camera_stream: CameraStream, config: AppConfig, stop_event: th
     )
 
     while not stop_event.is_set():
-        frame = camera_stream.read_frame()
-        if frame is not None:
-            timestamp = datetime.now()
-            filename = timestamp.strftime("%Y%m%d_%H%M%S.jpg")
-            output_path = config.frame_store_dir / filename
-
-            if cv2.imwrite(str(output_path), frame):
-                LOGGER.info("Captured frame at %s -> %s", timestamp.isoformat(), output_path)
-                _delete_oldest_frames(config.frame_store_dir, config.max_frames)
-            else:
-                LOGGER.error("Failed to save frame to %s", output_path)
-        else:
-            LOGGER.warning("Capture skipped because no frame was available")
+        capture_single_frame(camera_stream, config)
 
         stop_event.wait(config.capture_interval_seconds)
 

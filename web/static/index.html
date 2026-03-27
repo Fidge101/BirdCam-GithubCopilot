@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BirdCam Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0d0f10;
+      --panel: #161a1d;
+      --amber: #f5a623;
+      --cyan: #00c8b4;
+      --text: #d7dadc;
+      --muted: #8e959b;
+      --ok: #35d07f;
+      --err: #ff4d5a;
+      --transition: 200ms ease;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'DM Mono', monospace;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      overflow: hidden;
+    }
+    h1, h2, h3 { font-family: 'Syne', sans-serif; margin: 0; }
+    .dash {
+      display: grid;
+      grid-template-columns: 3fr 5fr 2fr;
+      gap: 12px;
+      padding: 12px;
+      min-height: 0;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid #20262a;
+      border-radius: 10px;
+      padding: 12px;
+      transition: all var(--transition);
+      min-height: 0;
+      overflow: hidden;
+    }
+    .left, .right { display: flex; flex-direction: column; gap: 10px; }
+    .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid #2b3136;
+      background: #13181b;
+      color: var(--text);
+      font-size: 12px;
+    }
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      animation: pulse 1.4s infinite;
+      background: var(--err);
+    }
+    .dot.live { background: var(--ok); }
+    @keyframes pulse { 0% { opacity: .4; } 50% { opacity: 1; } 100% { opacity: .4; } }
+
+    .metric { color: var(--muted); font-size: 12px; }
+    .metric strong { color: var(--cyan); font-weight: 500; }
+    .btn {
+      border: 1px solid #2a3034;
+      background: #101518;
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all var(--transition);
+      font-family: inherit;
+      font-size: 12px;
+    }
+    .btn:hover { border-color: var(--amber); color: var(--amber); }
+    .btn.primary { background: rgba(245,166,35,.1); border-color: var(--amber); color: var(--amber); }
+    .btn.cyan { border-color: var(--cyan); color: var(--cyan); background: rgba(0,200,180,.1); }
+    .divider { height: 1px; background: #23292d; margin: 4px 0; }
+
+    details {
+      border: 1px solid #242a2f;
+      border-radius: 8px;
+      padding: 8px;
+      background: #12171a;
+    }
+    summary { cursor: pointer; color: var(--amber); }
+    .field { display: grid; gap: 5px; margin-top: 8px; }
+    label { color: var(--muted); font-size: 12px; }
+    input[type="range"], input[type="number"] { width: 100%; }
+    input[type="number"] {
+      background: #0f1315; color: var(--text); border: 1px solid #2a3035;
+      border-radius: 6px; padding: 7px;
+      font-family: inherit;
+    }
+
+    .feed-wrap {
+      position: relative;
+      height: 100%;
+      min-height: 380px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #2a3034;
+      background: #0d1012;
+    }
+    #streamImg {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      background: #090b0c;
+    }
+    .feed-wrap::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0.05),
+        rgba(0, 0, 0, 0.05) 1px,
+        transparent 2px,
+        transparent 4px
+      );
+      opacity: .04;
+    }
+    .feed-label {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-size: 12px;
+      color: var(--amber);
+      background: rgba(0,0,0,.5);
+      border: 1px solid #394147;
+      border-radius: 6px;
+      padding: 4px 8px;
+      z-index: 4;
+    }
+    .watermark {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      font-size: 12px;
+      color: #d2d4d7;
+      background: rgba(0,0,0,.45);
+      border-radius: 6px;
+      padding: 4px 7px;
+      z-index: 4;
+    }
+    #noSignal {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      color: var(--err);
+      z-index: 3;
+      font-size: 26px;
+      letter-spacing: 2px;
+      text-shadow: 0 0 12px rgba(255,77,90,.35);
+      background:
+        linear-gradient(0deg, rgba(0,0,0,.72), rgba(0,0,0,.72)),
+        repeating-linear-gradient(90deg, #1a1f22 0 2px, #0f1215 2px 4px);
+      animation: noise 0.2s infinite steps(2);
+    }
+    @keyframes noise {
+      0% { transform: translateX(0); }
+      50% { transform: translateX(1px); }
+      100% { transform: translateX(0); }
+    }
+
+    .frames-head { display: flex; justify-content: space-between; align-items: center; }
+    #frameCountBadge {
+      border: 1px solid #2b3237;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      color: var(--amber);
+    }
+    .thumb-grid {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      overflow: auto;
+      min-height: 0;
+      flex: 1;
+      padding-right: 4px;
+    }
+    .thumb {
+      position: relative;
+      border: 1px solid #2a3035;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0f1315;
+      cursor: pointer;
+    }
+    .thumb img { width: 100%; display: block; aspect-ratio: 16 / 9; object-fit: cover; }
+    .thumb-info {
+      padding: 4px;
+      font-size: 10px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .thumb-del {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      opacity: 0;
+      transition: opacity var(--transition);
+      border: 1px solid var(--err);
+      color: var(--err);
+      background: rgba(0,0,0,.5);
+      font-size: 10px;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+    .thumb:hover .thumb-del { opacity: 1; }
+
+    .bottom {
+      border-top: 1px solid #23292d;
+      background: #0b0d0e;
+      padding: 8px 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .log-head { display: flex; align-items: center; justify-content: space-between; }
+    #logsBody { display: none; }
+    #logOutput {
+      background: #0e1214;
+      border: 1px solid #1d2327;
+      border-radius: 8px;
+      min-height: 120px;
+      max-height: 220px;
+      overflow: auto;
+      margin-top: 8px;
+      padding: 8px;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .log-line.info { color: #a0a6ab; }
+    .log-line.warning { color: var(--amber); }
+    .log-line.error { color: var(--err); }
+
+    #toastArea {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      display: grid;
+      gap: 8px;
+      z-index: 100;
+    }
+    .toast {
+      min-width: 220px;
+      border: 1px solid;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      background: #11161a;
+      animation: fadein var(--transition);
+    }
+    .toast.success { border-color: var(--cyan); color: var(--cyan); }
+    .toast.warning { border-color: var(--amber); color: var(--amber); }
+    .toast.error { border-color: var(--err); color: var(--err); }
+    @keyframes fadein { from { opacity: 0; transform: translateY(-3px);} to { opacity:1; transform: translateY(0);} }
+
+    #lightbox {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(0,0,0,.84);
+      z-index: 200;
+    }
+    #lightbox img {
+      max-width: 92vw;
+      max-height: 88vh;
+      border: 1px solid #353c42;
+      border-radius: 10px;
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #2e3439;
+      border-top-color: var(--amber);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+      margin-left: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg);} }
+
+    @media (max-width: 1200px) {
+      .dash { grid-template-columns: 1fr; grid-template-rows: auto auto auto; overflow: auto; }
+      body { overflow: auto; }
+      .feed-wrap { min-height: 340px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="dash">
+    <section class="panel left">
+      <h2>Camera Status</h2>
+      <div class="row">
+        <span class="status-badge"><span id="statusDot" class="dot"></span><span id="statusText">OFFLINE</span></span>
+        <span id="clock" class="metric">--:--:--</span>
+      </div>
+      <div class="metric">Uptime: <strong id="uptime">0s</strong></div>
+      <div class="metric">CPU Temp: <strong id="cpuTemp">--</strong></div>
+      <div class="metric">Frames: <strong id="frameCount">0</strong></div>
+      <button id="captureBtn" class="btn primary">Capture Frame Now</button>
+
+      <div class="divider"></div>
+
+      <details>
+        <summary>Config</summary>
+        <div class="field">
+          <label for="intervalSlider">Capture interval <span id="intervalLabel">every 1 minute</span></label>
+          <input id="intervalSlider" type="range" min="10" max="3600" value="60" />
+        </div>
+        <div class="field">
+          <label for="maxFramesInput">Max frames</label>
+          <input id="maxFramesInput" type="number" min="1" value="100" />
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button id="saveConfigBtn" class="btn cyan">Save Config</button>
+          <span id="configMsg" class="metric"></span>
+        </div>
+      </details>
+    </section>
+
+    <section class="panel">
+      <div class="feed-wrap">
+        <div class="feed-label">CAM 01 / LIVE</div>
+        <img id="streamImg" src="/stream" alt="Live camera stream" />
+        <div id="noSignal">NO SIGNAL</div>
+        <div id="watermark" class="watermark">--</div>
+      </div>
+    </section>
+
+    <section class="panel right">
+      <div class="frames-head">
+        <h3>Frames & Timelapse</h3>
+        <span id="frameCountBadge">0</span>
+      </div>
+      <button id="timelapseBtn" class="btn">Generate Timelapse<span id="timelapseSpin" style="display:none" class="spinner"></span></button>
+      <img id="timelapsePreview" alt="Timelapse preview" style="display:none;width:100%;border:1px solid #2a3035;border-radius:8px;cursor:pointer;" />
+      <button id="clearFramesBtn" class="btn">Clear All Frames</button>
+      <div id="thumbGrid" class="thumb-grid"></div>
+    </section>
+  </div>
+
+  <section class="bottom">
+    <div class="log-head">
+      <button id="toggleLogsBtn" class="btn">Show Logs</button>
+      <button id="clearLogsBtn" class="btn">Clear</button>
+    </div>
+    <div id="logsBody">
+      <div id="logOutput"></div>
+    </div>
+  </section>
+
+  <div id="toastArea"></div>
+
+  <div id="lightbox">
+    <img id="lightboxImg" alt="Preview" />
+  </div>
+
+  <script>
+    const state = {
+      logsSource: null,
+      logsOpen: false,
+      maxLogLines: 200,
+      streamHealthy: true,
+      timelapsePollHandle: null,
+    };
+
+    function formatUptime(totalSeconds) {
+      const s = Number(totalSeconds || 0);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      return `${h}h ${m}m ${sec}s`;
+    }
+
+    function intervalLabel(seconds) {
+      const minutes = Math.max(1, Math.round(seconds / 60));
+      return `every ${minutes} minute${minutes === 1 ? '' : 's'}`;
+    }
+
+    function showToast(message, type = 'warning') {
+      const toastArea = document.getElementById('toastArea');
+      const node = document.createElement('div');
+      node.className = `toast ${type}`;
+      node.textContent = message;
+      toastArea.appendChild(node);
+      setTimeout(() => node.remove(), 3000);
+    }
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options,
+      });
+      let body = null;
+      try { body = await res.json(); } catch (_) { body = null; }
+      if (!res.ok) {
+        const errorMessage = body?.error || `${res.status} ${res.statusText}`;
+        throw new Error(errorMessage);
+      }
+      return body;
+    }
+
+    /*
+      === STATUS POLLING ===
+      Inputs: none (reads /api/status and /api/config).
+      Outputs: updates status widgets, clock, metrics, and config controls.
+      Why: keeps dashboard telemetry fresh without page reload.
+    */
+    function initStatusPolling() {
+      const statusDot = document.getElementById('statusDot');
+      const statusText = document.getElementById('statusText');
+      const uptimeEl = document.getElementById('uptime');
+      const cpuTempEl = document.getElementById('cpuTemp');
+      const frameCountEl = document.getElementById('frameCount');
+      const frameCountBadge = document.getElementById('frameCountBadge');
+      const clock = document.getElementById('clock');
+      const watermark = document.getElementById('watermark');
+
+      const tickClock = () => {
+        const now = new Date();
+        const stamp = now.toLocaleString();
+        clock.textContent = stamp;
+        watermark.textContent = stamp;
+      };
+      tickClock();
+      setInterval(tickClock, 1000);
+
+      const refreshStatus = async () => {
+        try {
+          const status = await api('/api/status');
+          const live = !!status.camera_connected;
+          statusDot.classList.toggle('live', live);
+          statusText.textContent = live ? 'LIVE' : 'OFFLINE';
+          uptimeEl.textContent = formatUptime(status.uptime_seconds);
+          cpuTempEl.textContent = status.cpu_temp_c == null ? 'n/a' : `${status.cpu_temp_c}°C`;
+          frameCountEl.textContent = String(status.frame_count ?? 0);
+          frameCountBadge.textContent = `${status.frame_count ?? 0}`;
+        } catch (err) {
+          showToast(`Status error: ${err.message}`, 'error');
+        }
+      };
+
+      const loadConfig = async () => {
+        try {
+          const cfg = await api('/api/config');
+          const slider = document.getElementById('intervalSlider');
+          const label = document.getElementById('intervalLabel');
+          const maxFrames = document.getElementById('maxFramesInput');
+          slider.value = String(cfg.capture_interval_seconds);
+          label.textContent = intervalLabel(cfg.capture_interval_seconds);
+          maxFrames.value = String(cfg.max_frames);
+        } catch (err) {
+          showToast(`Config load failed: ${err.message}`, 'warning');
+        }
+      };
+
+      refreshStatus();
+      loadConfig();
+      setInterval(refreshStatus, 5000);
+    }
+
+    /*
+      === STREAM HEALTH CHECK ===
+      Inputs: stream image load/error events.
+      Outputs: toggles NO SIGNAL placeholder visibility.
+      Why: degrades gracefully when camera or network is unavailable.
+    */
+    function initStreamHealthCheck() {
+      const img = document.getElementById('streamImg');
+      const noSignal = document.getElementById('noSignal');
+
+      const setHealth = (ok) => {
+        state.streamHealthy = ok;
+        noSignal.style.display = ok ? 'none' : 'grid';
+      };
+
+      img.addEventListener('load', () => setHealth(true));
+      img.addEventListener('error', () => {
+        setHealth(false);
+        setTimeout(() => {
+          img.src = `/stream?t=${Date.now()}`;
+        }, 1500);
+      });
+    }
+
+    /*
+      === FRAME GALLERY ===
+      Inputs: /api/frames data and user click/delete actions.
+      Outputs: thumbnail grid rendering, preview open, frame deletion.
+      Why: enables quick inspection and cleanup of captured frames.
+    */
+    function initFrameGallery() {
+      const grid = document.getElementById('thumbGrid');
+      const lightbox = document.getElementById('lightbox');
+      const lightboxImg = document.getElementById('lightboxImg');
+      const clearFramesBtn = document.getElementById('clearFramesBtn');
+
+      const openLightbox = (src) => {
+        lightboxImg.src = src;
+        lightbox.style.display = 'grid';
+      };
+
+      lightbox.addEventListener('click', () => {
+        lightbox.style.display = 'none';
+      });
+
+      const renderFrames = async () => {
+        try {
+          const frames = await api('/api/frames');
+          grid.innerHTML = '';
+          for (const frame of frames) {
+            const card = document.createElement('div');
+            card.className = 'thumb';
+
+            const image = document.createElement('img');
+            image.src = `/api/frames/${encodeURIComponent(frame.filename)}`;
+            image.alt = frame.filename;
+            image.addEventListener('click', () => openLightbox(image.src));
+
+            const del = document.createElement('button');
+            del.className = 'thumb-del';
+            del.textContent = 'DEL';
+            del.addEventListener('click', async (event) => {
+              event.stopPropagation();
+              if (!confirm(`Delete ${frame.filename}?`)) return;
+              try {
+                await api(`/api/frames/${encodeURIComponent(frame.filename)}`, { method: 'DELETE' });
+                showToast('Frame deleted', 'success');
+                renderFrames();
+              } catch (err) {
+                showToast(`Delete failed: ${err.message}`, 'error');
+              }
+            });
+
+            const info = document.createElement('div');
+            info.className = 'thumb-info';
+            info.textContent = `${frame.filename} • ${new Date(frame.timestamp).toLocaleString()}`;
+
+            card.appendChild(image);
+            card.appendChild(del);
+            card.appendChild(info);
+            card.addEventListener('click', () => openLightbox(image.src));
+            grid.appendChild(card);
+          }
+        } catch (err) {
+          showToast(`Frames load failed: ${err.message}`, 'error');
+        }
+      };
+
+      clearFramesBtn.addEventListener('click', async () => {
+        if (!confirm('Delete all frames?')) return;
+        try {
+          await api('/api/frames', { method: 'DELETE' });
+          showToast('All frames cleared', 'success');
+          renderFrames();
+        } catch (err) {
+          showToast(`Clear failed: ${err.message}`, 'error');
+        }
+      });
+
+      window.refreshFrames = renderFrames;
+      renderFrames();
+      setInterval(renderFrames, 8000);
+    }
+
+    /*
+      === TIMELAPSE ===
+      Inputs: generate button click and /api/status + preview endpoint.
+      Outputs: timelapse job trigger, spinner state, and preview rendering.
+      Why: allows on-demand timelapse generation without shell access.
+    */
+    function initTimelapse() {
+      const btn = document.getElementById('timelapseBtn');
+      const spin = document.getElementById('timelapseSpin');
+      const preview = document.getElementById('timelapsePreview');
+      const lightbox = document.getElementById('lightbox');
+      const lightboxImg = document.getElementById('lightboxImg');
+
+      const loadPreview = async () => {
+        preview.style.display = 'none';
+        preview.src = `/api/timelapse/preview?t=${Date.now()}`;
+      };
+
+      preview.addEventListener('load', () => {
+        preview.style.display = 'block';
+      });
+      preview.addEventListener('error', () => {
+        preview.style.display = 'none';
+      });
+      preview.addEventListener('click', () => {
+        lightboxImg.src = preview.src;
+        lightbox.style.display = 'grid';
+      });
+
+      const pollJob = async () => {
+        try {
+          const status = await api('/api/status');
+          const job = status.timelapse_job || {};
+          const running = job.status === 'running';
+          spin.style.display = running ? 'inline-block' : 'none';
+          if (job.status === 'completed') {
+            showToast('Timelapse generated', 'success');
+            loadPreview();
+            clearInterval(state.timelapsePollHandle);
+            state.timelapsePollHandle = null;
+          }
+          if (job.status === 'error') {
+            showToast(`Timelapse error: ${job.message}`, 'error');
+            clearInterval(state.timelapsePollHandle);
+            state.timelapsePollHandle = null;
+          }
+        } catch (err) {
+          showToast(`Job status failed: ${err.message}`, 'warning');
+        }
+      };
+
+      btn.addEventListener('click', async () => {
+        try {
+          const result = await api('/api/timelapse/generate', { method: 'POST' });
+          if (result.status === 'running') {
+            spin.style.display = 'inline-block';
+            if (!state.timelapsePollHandle) {
+              state.timelapsePollHandle = setInterval(pollJob, 1500);
+            }
+          }
+          showToast('Timelapse job started', 'warning');
+        } catch (err) {
+          showToast(`Timelapse start failed: ${err.message}`, 'error');
+        }
+      });
+
+      loadPreview();
+    }
+
+    /*
+      === CONFIG PANEL ===
+      Inputs: slider, numeric input, save button.
+      Outputs: POST /api/config with mutable scheduling values.
+      Why: provides safe runtime tuning for capture behavior from browser.
+    */
+    function initConfigPanel() {
+      const intervalSlider = document.getElementById('intervalSlider');
+      const intervalLabelEl = document.getElementById('intervalLabel');
+      const maxFramesInput = document.getElementById('maxFramesInput');
+      const saveConfigBtn = document.getElementById('saveConfigBtn');
+      const configMsg = document.getElementById('configMsg');
+      const captureBtn = document.getElementById('captureBtn');
+
+      intervalSlider.addEventListener('input', () => {
+        intervalLabelEl.textContent = intervalLabel(Number(intervalSlider.value));
+      });
+
+      saveConfigBtn.addEventListener('click', async () => {
+        configMsg.textContent = '';
+        try {
+          const payload = {
+            capture_interval_seconds: Number(intervalSlider.value),
+            max_frames: Number(maxFramesInput.value),
+          };
+          await api('/api/config', { method: 'POST', body: JSON.stringify(payload) });
+          configMsg.textContent = 'Saved';
+          showToast('Config updated', 'success');
+        } catch (err) {
+          configMsg.textContent = 'Failed';
+          showToast(`Config save failed: ${err.message}`, 'error');
+        }
+      });
+
+      captureBtn.addEventListener('click', async () => {
+        try {
+          await api('/api/capture', { method: 'POST' });
+          showToast('Frame captured', 'success');
+          if (window.refreshFrames) window.refreshFrames();
+        } catch (err) {
+          showToast(`Capture failed: ${err.message}`, 'error');
+        }
+      });
+    }
+
+    /*
+      === LOG STREAM ===
+      Inputs: user toggles logs panel and SSE stream from /api/logs/stream.
+      Outputs: live terminal-like log display with level-based colors.
+      Why: keeps diagnostics visible without SSH shell tailing.
+    */
+    function initLogStream() {
+      const toggleBtn = document.getElementById('toggleLogsBtn');
+      const clearBtn = document.getElementById('clearLogsBtn');
+      const logsBody = document.getElementById('logsBody');
+      const output = document.getElementById('logOutput');
+
+      const appendLine = (text) => {
+        const lower = text.toLowerCase();
+        const line = document.createElement('div');
+        let level = 'info';
+        if (lower.includes('error')) level = 'error';
+        else if (lower.includes('warning')) level = 'warning';
+        line.className = `log-line ${level}`;
+        line.textContent = text;
+        output.appendChild(line);
+
+        while (output.children.length > state.maxLogLines) {
+          output.removeChild(output.firstChild);
+        }
+        output.scrollTop = output.scrollHeight;
+      };
+
+      const openLogs = () => {
+        if (state.logsSource) return;
+        state.logsSource = new EventSource('/api/logs/stream');
+        state.logsSource.onmessage = (event) => appendLine(event.data);
+        state.logsSource.onerror = () => showToast('Log stream disconnected', 'warning');
+      };
+
+      const closeLogs = () => {
+        if (state.logsSource) {
+          state.logsSource.close();
+          state.logsSource = null;
+        }
+      };
+
+      toggleBtn.addEventListener('click', () => {
+        state.logsOpen = !state.logsOpen;
+        logsBody.style.display = state.logsOpen ? 'block' : 'none';
+        toggleBtn.textContent = state.logsOpen ? 'Hide Logs' : 'Show Logs';
+        if (state.logsOpen) openLogs();
+        else closeLogs();
+      });
+
+      clearBtn.addEventListener('click', () => {
+        output.innerHTML = '';
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initStatusPolling();
+      initStreamHealthCheck();
+      initFrameGallery();
+      initTimelapse();
+      initConfigPanel();
+      initLogStream();
+    });
+  </script>
+</body>
+</html>

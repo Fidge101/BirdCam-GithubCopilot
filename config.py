@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class AppConfig:
     """Store validated runtime settings for camera access and frame capture.
 
@@ -33,6 +33,9 @@ class AppConfig:
     frame_store_dir: Path
     max_frames: int
     rtsp_url: str
+    stream_quality: int
+    port: int
+    log_file_path: Path
 
 
 def _require_env(name: str) -> str:
@@ -64,14 +67,22 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     timelapse_output_path = Path(_require_env("TIMELAPSE_OUTPUT_PATH"))
     frame_store_dir = Path(_require_env("FRAME_STORE_DIR"))
     max_frames = int(_require_env("MAX_FRAMES"))
+    stream_quality = int(os.getenv("STREAM_QUALITY", "80"))
+    port = int(os.getenv("PORT", "5000"))
+    log_file_path = Path(os.getenv("LOG_FILE_PATH", "./birdcam.log"))
 
     if capture_interval_seconds <= 0:
         raise ValueError("CAPTURE_INTERVAL_SECONDS must be greater than zero")
     if max_frames <= 0:
         raise ValueError("MAX_FRAMES must be greater than zero")
+    if not 0 <= stream_quality <= 100:
+        raise ValueError("STREAM_QUALITY must be between 0 and 100")
+    if not 1 <= port <= 65535:
+        raise ValueError("PORT must be between 1 and 65535")
 
     frame_store_dir.mkdir(parents=True, exist_ok=True)
     timelapse_output_path.parent.mkdir(parents=True, exist_ok=True)
+    log_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Tapo C120 exposes /stream1 as the primary HD RTSP feed; /stream2 is the
     # lower-resolution sub-stream intended for lighter-bandwidth clients.
@@ -88,4 +99,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         frame_store_dir=frame_store_dir,
         max_frames=max_frames,
         rtsp_url=rtsp_url,
+        stream_quality=stream_quality,
+        port=port,
+        log_file_path=log_file_path,
     )

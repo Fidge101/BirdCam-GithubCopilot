@@ -11,25 +11,39 @@ import logging
 import sys
 import threading
 import time
+import socket
 
 from camera import CameraStream
 from config import load_config
 from scheduler import run_scheduler
 from timelapse import generate_timelapse
 from viewer import run_live_view
+from web.server import start_web_server
 
 
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 
 
-def configure_logging() -> None:
+def configure_logging(log_file_path) -> None:
     """Configure application-wide logging with a consistent format.
 
     Central logging setup keeps command-line output readable and consistent
     across the viewer, scheduler, timelapse, and camera modules.
     """
 
-    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stdout)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.handlers.clear()
+
+    formatter = logging.Formatter(LOG_FORMAT)
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    root_logger.addHandler(stream_handler)
+
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--live", action="store_true", help="run the live viewer")
     group.add_argument("--capture", action="store_true", help="run the frame capture scheduler")
+    group.add_argument("--web", action="store_true", help="run the web dashboard and capture scheduler")
     group.add_argument("--timelapse", action="store_true", help="generate a timelapse contact sheet")
     group.add_argument("--all", action="store_true", help="run live viewer and capture scheduler together")
     parser.add_argument(
@@ -73,10 +88,10 @@ def main() -> int:
     focused on one job and import cleanly in isolation.
     """
 
-    configure_logging()
-    logger = logging.getLogger(__name__)
     args = parse_args()
     config = load_config()
+    configure_logging(config.log_file_path)
+    logger = logging.getLogger(__name__)
     stop_event = threading.Event()
 
     if args.timelapse:
@@ -93,8 +108,18 @@ def main() -> int:
             run_live_view(camera_stream, stop_event=stop_event)
         elif args.capture:
             _run_capture_only(camera_stream, config, stop_event)
+        elif args.web:
+            run_scheduler(camera_stream, config, stop_event=stop_event)
+            start_web_server(camera_stream, config, stop_event=stop_event)
+            hostname = socket.gethostname()
+            logger.info("Dashboard: http://%s.local:%s", hostname, config.port)
+            while not stop_event.is_set():
+                time.sleep(0.5)
         elif args.all:
             run_scheduler(camera_stream, config, stop_event=stop_event)
+            start_web_server(camera_stream, config, stop_event=stop_event)
+            hostname = socket.gethostname()
+            logger.info("Dashboard: http://%s.local:%s", hostname, config.port)
             run_live_view(camera_stream, stop_event=stop_event)
     except KeyboardInterrupt:
         logger.info("Shutting down")

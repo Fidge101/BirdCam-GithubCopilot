@@ -3,3 +3,5 @@ Pillow==10.4.0
 python-dotenv==1.0.1
 imageio==2.36.1
 numpy==2.1.1
+flask==3.1.1
+flask-cors==5.0.1

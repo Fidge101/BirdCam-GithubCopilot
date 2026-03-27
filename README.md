@@ -10,6 +10,7 @@ BirdCam is a Python application for Raspberry Pi that connects to a Tapo C120 ov
 - Capture frames in a background thread while the viewer stays open
 - Keep frame storage bounded by deleting the oldest captures
 - Generate a contact-sheet timelapse JPEG and optional animated GIF
+- Run a local web dashboard with MJPEG live stream, controls, and log tailing
 
 ## Find The Camera IP
 
@@ -91,8 +92,17 @@ Required variables:
 - `TIMELAPSE_OUTPUT_PATH` - JPEG contact sheet output path
 - `FRAME_STORE_DIR` - directory for captured JPEG frames
 - `MAX_FRAMES` - retention cap before oldest frames are deleted
+- `STREAM_QUALITY` - MJPEG JPEG quality (`0-100`, higher = better quality + bandwidth)
+- `PORT` - local dashboard HTTP port (default `5000`)
+- `LOG_FILE_PATH` - log file path used by CLI and dashboard live logs
 
 ## Usage
+
+Run web dashboard and scheduler (headless mode):
+
+```bash
+python main.py --web
+```
 
 Run the live viewer:
 
@@ -112,6 +122,8 @@ Run the live viewer and background capture together:
 python main.py --all
 ```
 
+`--all` also starts the web dashboard server.
+
 Generate the timelapse contact sheet from saved frames:
 
 ```bash
@@ -124,6 +136,29 @@ Override the number of timelapse grid columns:
 python main.py --timelapse --columns 8
 ```
 
+## Accessing The Dashboard
+
+When started with `--web` or `--all`, BirdCam logs a local URL like:
+
+```text
+Dashboard: http://<pi-hostname>.local:5000
+```
+
+Open the dashboard from any browser on the same network using either:
+
+- `http://raspberrypi.local:5000` (or your Pi hostname)
+- `http://<PI_IP_ADDRESS>:5000`
+
+The MJPEG stream is CPU-light on Raspberry Pi because frames are served directly as multipart JPEG (no video transcoding pipeline).
+
+For remote access outside your local network, use an SSH tunnel (simple and out-of-scope for full VPN setup):
+
+```bash
+ssh -L 5000:localhost:5000 pi@<PI_IP_ADDRESS>
+```
+
+Then open `http://localhost:5000` on your local machine.
+
 ## Project Structure
 
 - `config.py` loads and validates `.env` settings
@@ -132,3 +167,5 @@ python main.py --timelapse --columns 8
 - `scheduler.py` captures frames in a background thread
 - `timelapse.py` creates the contact-sheet output and optional GIF
 - `main.py` provides the CLI entry point
+- `web/server.py` provides Flask APIs, MJPEG stream, and SSE log streaming
+- `web/static/index.html` provides the single-file dashboard UI
