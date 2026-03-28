@@ -103,7 +103,10 @@ def main() -> int:
         )
         return 0
 
-    camera_stream = CameraStream(config.rtsp_url)
+    camera_stream = CameraStream(
+        config.rtsp_url,
+        blank_frame_reconnect_threshold=config.blank_frame_reconnect_threshold,
+    )
     if not camera_stream.connect():
         logger.error("Unable to connect to camera; exiting")
         return 1

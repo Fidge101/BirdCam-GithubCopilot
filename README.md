@@ -135,6 +135,7 @@ Required variables:
 - `DAILY_EXPORT_DIR` - output directory for dated daily exports (e.g. `./output/daily`)
 - `TIMELAPSE_WIDTH` - output thumbnail width for timelapse generation
 - `TIMELAPSE_HEIGHT` - output thumbnail height for timelapse generation
+- `BLANK_FRAME_RECONNECT_THRESHOLD` - reconnect camera after this many consecutive blank frames
 
 ## Usage
 
@@ -210,7 +211,13 @@ The MJPEG stream is CPU-light on Raspberry Pi because frames are served directly
 
 In the dashboard Timelapse panel, use `View Timelapse File`, `View GIF`, or `View MP4` after generation completes.
 
+If the live feed goes blank, use the `Reconnect Camera` button in the dashboard status panel to force an RTSP reconnect without restarting the app.
+
 In `Config`, set `Timelapse width` and `Timelapse height` to control timelapse generation resolution.
+
+The config panel also includes timelapse resolution presets (`320x180`, `640x360`, `960x540`) for quick selection.
+
+The dashboard Logs panel preloads the last 100 lines when opened, then continues with live streaming.
 
 BirdCam also supports daily scheduled timelapse exports:
 

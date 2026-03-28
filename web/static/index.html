@@ -205,6 +205,16 @@
       font-family: inherit;
       font-size: 12px;
     }
+    #timelapsePresetSelect {
+      width: 100%;
+      background: #0f1315;
+      color: var(--text);
+      border: 1px solid #2a3035;
+      border-radius: 6px;
+      padding: 7px;
+      font-family: inherit;
+      font-size: 12px;
+    }
     #exportStartDateSelect,
     #exportEndDateSelect {
       width: 100%;
@@ -497,6 +507,7 @@
       <div class="metric">CPU Temp: <strong id="cpuTemp">--</strong></div>
       <div class="metric">Frames: <strong id="frameCount">0</strong></div>
       <button id="captureBtn" class="btn primary">Capture Frame Now</button>
+      <button id="reconnectBtn" class="btn">Reconnect Camera</button>
 
       <div class="divider"></div>
 
@@ -509,6 +520,15 @@
         <div class="field">
           <label for="maxFramesInput">Max frames</label>
           <input id="maxFramesInput" type="number" min="1" value="100" />
+        </div>
+        <div class="field">
+          <label for="timelapsePresetSelect">Timelapse resolution preset</label>
+          <select id="timelapsePresetSelect">
+            <option value="320x180">320x180</option>
+            <option value="640x360">640x360</option>
+            <option value="960x540">960x540</option>
+            <option value="custom">Custom</option>
+          </select>
         </div>
         <div class="row" style="margin-top:4px;">
           <div class="field" style="margin:0; flex: 1;">
@@ -685,11 +705,21 @@
           const maxFrames = document.getElementById('maxFramesInput');
           const timelapseWidth = document.getElementById('timelapseWidthInput');
           const timelapseHeight = document.getElementById('timelapseHeightInput');
+          const timelapsePreset = document.getElementById('timelapsePresetSelect');
           slider.value = String(cfg.capture_interval_seconds);
           label.textContent = intervalLabel(cfg.capture_interval_seconds);
           maxFrames.value = String(cfg.max_frames);
-          timelapseWidth.value = String(cfg.timelapse_width ?? 320);
-          timelapseHeight.value = String(cfg.timelapse_height ?? 180);
+          const width = Number(cfg.timelapse_width ?? 320);
+          const height = Number(cfg.timelapse_height ?? 180);
+          timelapseWidth.value = String(width);
+          timelapseHeight.value = String(height);
+
+          const presetValue = `${width}x${height}`;
+          if (["320x180", "640x360", "960x540"].includes(presetValue)) {
+            timelapsePreset.value = presetValue;
+          } else {
+            timelapsePreset.value = 'custom';
+          }
         } catch (err) {
           showToast(`Config load failed: ${err.message}`, 'warning');
         }
@@ -1151,15 +1181,39 @@
       const intervalSlider = document.getElementById('intervalSlider');
       const intervalLabelEl = document.getElementById('intervalLabel');
       const maxFramesInput = document.getElementById('maxFramesInput');
+      const timelapsePresetSelect = document.getElementById('timelapsePresetSelect');
       const timelapseWidthInput = document.getElementById('timelapseWidthInput');
       const timelapseHeightInput = document.getElementById('timelapseHeightInput');
       const saveConfigBtn = document.getElementById('saveConfigBtn');
       const configMsg = document.getElementById('configMsg');
       const captureBtn = document.getElementById('captureBtn');
+      const reconnectBtn = document.getElementById('reconnectBtn');
 
       intervalSlider.addEventListener('input', () => {
         intervalLabelEl.textContent = intervalLabel(Number(intervalSlider.value));
       });
+
+      timelapsePresetSelect.addEventListener('change', () => {
+        const value = timelapsePresetSelect.value;
+        if (value === 'custom') {
+          return;
+        }
+        const [width, height] = value.split('x').map(Number);
+        timelapseWidthInput.value = String(width);
+        timelapseHeightInput.value = String(height);
+      });
+
+      const syncPresetSelection = () => {
+        const presetValue = `${Number(timelapseWidthInput.value)}x${Number(timelapseHeightInput.value)}`;
+        if (["320x180", "640x360", "960x540"].includes(presetValue)) {
+          timelapsePresetSelect.value = presetValue;
+        } else {
+          timelapsePresetSelect.value = 'custom';
+        }
+      };
+
+      timelapseWidthInput.addEventListener('input', syncPresetSelection);
+      timelapseHeightInput.addEventListener('input', syncPresetSelection);
 
       saveConfigBtn.addEventListener('click', async () => {
         configMsg.textContent = '';
@@ -1186,6 +1240,20 @@
           if (window.refreshFrames) window.refreshFrames();
         } catch (err) {
           showToast(`Capture failed: ${err.message}`, 'error');
+        }
+      });
+
+      reconnectBtn.addEventListener('click', async () => {
+        reconnectBtn.disabled = true;
+        reconnectBtn.textContent = 'Reconnecting...';
+        try {
+          await api('/api/camera/reconnect', { method: 'POST' });
+          showToast('Camera reconnected', 'success');
+        } catch (err) {
+          showToast(`Reconnect failed: ${err.message}`, 'error');
+        } finally {
+          reconnectBtn.disabled = false;
+          reconnectBtn.textContent = 'Reconnect Camera';
         }
       });
     }
@@ -1220,6 +1288,16 @@
 
       const openLogs = () => {
         if (state.logsSource) return;
+        fetch('/api/logs/recent?limit=100')
+          .then((response) => response.json())
+          .then((payload) => {
+            const lines = Array.isArray(payload.lines) ? payload.lines : [];
+            lines.forEach((line) => appendLine(line));
+          })
+          .catch(() => {
+            showToast('Unable to preload recent logs', 'warning');
+          });
+
         state.logsSource = new EventSource('/api/logs/stream');
         state.logsSource.onmessage = (event) => appendLine(event.data);
         state.logsSource.onerror = () => showToast('Log stream disconnected', 'warning');

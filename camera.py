@@ -43,7 +43,7 @@ class CameraStream:
     Raspberry Pi dependency footprint small while still supporting reconnects.
     """
 
-    def __init__(self, rtsp_url: str) -> None:
+    def __init__(self, rtsp_url: str, blank_frame_reconnect_threshold: int = 3) -> None:
         """Store the RTSP URL and prepare a reusable VideoCapture instance.
 
         The instance keeps a lock because the scheduler and viewer may read from
@@ -54,6 +54,8 @@ class CameraStream:
         self._safe_rtsp_url = _mask_rtsp_credentials(rtsp_url)
         self.capture = cv2.VideoCapture()
         self._lock = threading.Lock()
+        self.blank_frame_reconnect_threshold = max(1, int(blank_frame_reconnect_threshold))
+        self._consecutive_blank_frames = 0
 
     def connect(self) -> bool:
         """Open the RTSP stream and report whether the connection succeeded.
@@ -73,6 +75,7 @@ class CameraStream:
                 LOGGER.error("Failed to open RTSP stream: %s", self._safe_rtsp_url)
                 return False
 
+            self._consecutive_blank_frames = 0
             LOGGER.info("Connected to camera stream")
             return True
 
@@ -107,13 +110,27 @@ class CameraStream:
             else:
                 success, frame = self.capture.read()
                 if success and frame is not None:
+                    self._consecutive_blank_frames = 0
                     return frame
-                LOGGER.error("Failed to read frame from camera stream")
+                self._consecutive_blank_frames += 1
+                LOGGER.warning(
+                    "Failed to read frame (%s/%s before reconnect)",
+                    self._consecutive_blank_frames,
+                    self.blank_frame_reconnect_threshold,
+                )
 
+        if self._consecutive_blank_frames < self.blank_frame_reconnect_threshold:
+            return None
+
+        LOGGER.warning(
+            "Reached blank frame reconnect threshold (%s), forcing reconnect",
+            self.blank_frame_reconnect_threshold,
+        )
         if self.reconnect():
             with self._lock:
                 success, frame = self.capture.read()
                 if success and frame is not None:
+                    self._consecutive_blank_frames = 0
                     return frame
                 LOGGER.error("Frame read failed after reconnect")
 
@@ -129,4 +146,5 @@ class CameraStream:
         with self._lock:
             if self.capture.isOpened():
                 self.capture.release()
+                self._consecutive_blank_frames = 0
                 LOGGER.info("Camera stream released")

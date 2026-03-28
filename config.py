@@ -43,6 +43,7 @@ class AppConfig:
     daily_export_dir: Path
     timelapse_width: int
     timelapse_height: int
+    blank_frame_reconnect_threshold: int
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -97,6 +98,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     daily_export_dir_raw = Path(os.getenv("DAILY_EXPORT_DIR", "./output/daily"))
     timelapse_width = int(os.getenv("TIMELAPSE_WIDTH", "320"))
     timelapse_height = int(os.getenv("TIMELAPSE_HEIGHT", "180"))
+    blank_frame_reconnect_threshold = int(os.getenv("BLANK_FRAME_RECONNECT_THRESHOLD", "3"))
 
     timelapse_output_path = (
         timelapse_output_path_raw
@@ -125,6 +127,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         raise ValueError("TIMELAPSE_WIDTH must be between 64 and 3840")
     if timelapse_height < 64 or timelapse_height > 2160:
         raise ValueError("TIMELAPSE_HEIGHT must be between 64 and 2160")
+    if blank_frame_reconnect_threshold < 1 or blank_frame_reconnect_threshold > 100:
+        raise ValueError("BLANK_FRAME_RECONNECT_THRESHOLD must be between 1 and 100")
     try:
         datetime.strptime(daily_export_time, "%H:%M")
     except ValueError as exc:
@@ -159,4 +163,5 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         daily_export_dir=daily_export_dir,
         timelapse_width=timelapse_width,
         timelapse_height=timelapse_height,
+        blank_frame_reconnect_threshold=blank_frame_reconnect_threshold,
     )

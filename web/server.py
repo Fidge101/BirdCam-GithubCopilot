@@ -10,6 +10,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
+from collections import deque
 from collections.abc import Callable
 
 import cv2
@@ -485,6 +486,16 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
             return jsonify({"ok": False, "error": "No frame available"}), 503
         return jsonify({"ok": True, "filename": output_path.name})
 
+    @app.post("/api/camera/reconnect")
+    def api_camera_reconnect() -> Response:
+        """Force RTSP camera reconnect and return updated connection status."""
+
+        LOGGER.warning("Manual camera reconnect requested from dashboard")
+        success = camera_stream.reconnect()
+        if not success:
+            return jsonify({"ok": False, "error": "Unable to reconnect camera stream"}), 503
+        return jsonify({"ok": True, "message": "Camera stream reconnected"})
+
     @app.get("/api/timelapse/preview")
     def api_timelapse_preview() -> Response:
         """Serve the timelapse JPEG contact sheet when it exists."""
@@ -834,6 +845,7 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
                     "timelapse_output_path": str(config.timelapse_output_path),
                     "timelapse_width": config.timelapse_width,
                     "timelapse_height": config.timelapse_height,
+                    "blank_frame_reconnect_threshold": config.blank_frame_reconnect_threshold,
                 }
             )
 
@@ -908,6 +920,32 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
                         time.sleep(0.25)
 
         return Response(tail_logs(), mimetype="text/event-stream")
+
+    @app.get("/api/logs/recent")
+    def api_logs_recent() -> Response:
+        """Return the most recent log lines for initial dashboard preload."""
+
+        limit_value = request.args.get("limit", "100").strip()
+        try:
+            limit = int(limit_value)
+        except ValueError:
+            return jsonify({"ok": False, "error": "limit must be an integer"}), 400
+
+        if limit <= 0:
+            return jsonify({"ok": False, "error": "limit must be greater than zero"}), 400
+        limit = min(limit, 500)
+
+        log_path = config.log_file_path
+        log_path.touch(exist_ok=True)
+
+        recent = deque(maxlen=limit)
+        with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                stripped = line.rstrip("\n").replace("\r", "")
+                if stripped:
+                    recent.append(stripped)
+
+        return jsonify({"lines": list(recent)})
 
     return app
 
