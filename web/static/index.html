@@ -147,6 +147,33 @@
       padding: 4px 8px;
       z-index: 4;
     }
+    .feed-fullscreen-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 5;
+      min-height: 30px;
+      padding: 4px 8px;
+      font-size: 11px;
+      background: rgba(0,0,0,.55);
+      border-color: #394147;
+    }
+    .feed-wrap:fullscreen {
+      border-radius: 0;
+      border: none;
+      background: #000;
+    }
+    .feed-wrap:fullscreen #streamImg {
+      background: #000;
+    }
+    .feed-wrap:-webkit-full-screen {
+      border-radius: 0;
+      border: none;
+      background: #000;
+    }
+    .feed-wrap:-webkit-full-screen #streamImg {
+      background: #000;
+    }
     .watermark {
       position: absolute;
       right: 10px;
@@ -550,6 +577,7 @@
     <section class="panel">
       <div class="feed-wrap">
         <div class="feed-label">CAM 01 / LIVE</div>
+        <button id="fullscreenBtn" class="btn feed-fullscreen-btn">Fullscreen</button>
         <img id="streamImg" src="/stream" alt="Live camera stream" />
         <div id="noSignal">NO SIGNAL</div>
         <div id="watermark" class="watermark">--</div>
@@ -752,6 +780,58 @@
           img.src = `/stream?t=${Date.now()}`;
         }, 1500);
       });
+    }
+
+    function initStreamFullscreen() {
+      const feedWrap = document.querySelector('.feed-wrap');
+      const fullscreenBtn = document.getElementById('fullscreenBtn');
+      if (!feedWrap || !fullscreenBtn) return;
+
+      const isFullscreen = () => (
+        document.fullscreenElement === feedWrap ||
+        document.webkitFullscreenElement === feedWrap
+      );
+
+      const syncButtonLabel = () => {
+        fullscreenBtn.textContent = isFullscreen() ? 'Exit Fullscreen' : 'Fullscreen';
+      };
+
+      const requestFullscreen = () => {
+        if (feedWrap.requestFullscreen) {
+          return feedWrap.requestFullscreen();
+        }
+        if (feedWrap.webkitRequestFullscreen) {
+          return Promise.resolve(feedWrap.webkitRequestFullscreen());
+        }
+        throw new Error('Fullscreen is not supported in this browser');
+      };
+
+      const exitFullscreen = () => {
+        if (document.exitFullscreen) {
+          return document.exitFullscreen();
+        }
+        if (document.webkitExitFullscreen) {
+          return Promise.resolve(document.webkitExitFullscreen());
+        }
+        return Promise.resolve();
+      };
+
+      fullscreenBtn.addEventListener('click', async () => {
+        try {
+          if (isFullscreen()) {
+            await exitFullscreen();
+          } else {
+            await requestFullscreen();
+          }
+          syncButtonLabel();
+        } catch (err) {
+          showToast(`Fullscreen failed: ${err.message}`, 'error');
+        }
+      });
+
+      document.addEventListener('fullscreenchange', syncButtonLabel);
+      document.addEventListener('webkitfullscreenchange', syncButtonLabel);
+      syncButtonLabel();
     }
 
     /*
@@ -1326,6 +1406,7 @@
     document.addEventListener('DOMContentLoaded', () => {
       initStatusPolling();
       initStreamHealthCheck();
+      initStreamFullscreen();
       initFrameGallery();
       initTimelapse();
       initConfigPanel();
