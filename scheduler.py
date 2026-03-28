@@ -109,6 +109,7 @@ def _daily_export_loop(config: AppConfig, stop_event: threading.Event) -> None:
                     config.daily_export_dir,
                     target_date,
                     columns=10,
+                    thumbnail_size=(config.timelapse_width, config.timelapse_height),
                 )
                 LOGGER.info("Daily timelapse export generated for %s -> %s", target_date.isoformat(), output_path)
             except ValueError as exc:

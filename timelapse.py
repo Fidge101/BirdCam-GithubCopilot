@@ -33,10 +33,14 @@ def _load_sorted_frames(frame_dir: Path) -> list[Path]:
     return sorted(frame_dir.glob("*.jpg"))
 
 
-def _export_sheet_and_animations(images: list[Image.Image], output_path: Path, columns: int) -> None:
+def _export_sheet_and_animations(
+    images: list[Image.Image],
+    output_path: Path,
+    columns: int,
+    thumbnail_size: tuple[int, int],
+) -> None:
     """Write contact-sheet JPEG and optional GIF/MP4 outputs from prepared frames."""
 
-    thumbnail_size = (320, 180)
     rows = math.ceil(len(images) / columns)
     sheet = Image.new(
         "RGB",
@@ -69,7 +73,12 @@ def _export_sheet_and_animations(images: list[Image.Image], output_path: Path, c
         LOGGER.info("imageio not available; skipping animated GIF/MP4 outputs")
 
 
-def generate_timelapse_from_frames(frame_paths: list[Path], output_path: str | Path, columns: int = 10) -> Path:
+def generate_timelapse_from_frames(
+    frame_paths: list[Path],
+    output_path: str | Path,
+    columns: int = 10,
+    thumbnail_size: tuple[int, int] = (320, 180),
+) -> Path:
     """Generate timelapse outputs from a specific list of frame files."""
 
     output_path = Path(output_path)
@@ -78,7 +87,8 @@ def generate_timelapse_from_frames(frame_paths: list[Path], output_path: str | P
     if not frame_paths:
         raise ValueError("No frames provided for timelapse generation")
 
-    thumbnail_size = (320, 180)
+    if thumbnail_size[0] <= 0 or thumbnail_size[1] <= 0:
+        raise ValueError("thumbnail_size must contain positive width and height")
     images: list[Image.Image] = []
 
     for frame_path in frame_paths:
@@ -94,11 +104,16 @@ def generate_timelapse_from_frames(frame_paths: list[Path], output_path: str | P
             canvas.paste(prepared, offset)
             images.append(canvas)
 
-    _export_sheet_and_animations(images, output_path, columns)
+    _export_sheet_and_animations(images, output_path, columns, thumbnail_size)
     return output_path
 
 
-def generate_timelapse(frame_dir: str | Path, output_path: str | Path, columns: int = 10) -> Path:
+def generate_timelapse(
+    frame_dir: str | Path,
+    output_path: str | Path,
+    columns: int = 10,
+    thumbnail_size: tuple[int, int] = (320, 180),
+) -> Path:
     """Build a thumbnail contact sheet and optional GIF/MP4 from captured frames.
 
     A contact sheet provides a fast visual summary of a session and is easier to
@@ -110,7 +125,7 @@ def generate_timelapse(frame_dir: str | Path, output_path: str | Path, columns: 
     if not frames:
         raise ValueError(f"No JPEG frames found in {frame_dir}")
 
-    return generate_timelapse_from_frames(frames, output_path, columns=columns)
+    return generate_timelapse_from_frames(frames, output_path, columns=columns, thumbnail_size=thumbnail_size)
 
 
 def generate_daily_timelapse_export(
@@ -118,6 +133,7 @@ def generate_daily_timelapse_export(
     export_root: str | Path,
     target_date: date,
     columns: int = 10,
+    thumbnail_size: tuple[int, int] = (320, 180),
 ) -> Path:
     """Generate dated daily timelapse outputs using only one day's frames."""
 
@@ -130,4 +146,4 @@ def generate_daily_timelapse_export(
 
     day_dir = export_root / target_date.isoformat()
     day_output = day_dir / "timelapse.jpg"
-    return generate_timelapse_from_frames(day_frames, day_output, columns=columns)
+    return generate_timelapse_from_frames(day_frames, day_output, columns=columns, thumbnail_size=thumbnail_size)

@@ -133,6 +133,8 @@ Required variables:
 - `DAILY_EXPORT_ENABLED` - enable daily timelapse export scheduler (`true`/`false`)
 - `DAILY_EXPORT_TIME` - local 24-hour time to generate previous day's export (`HH:MM`)
 - `DAILY_EXPORT_DIR` - output directory for dated daily exports (e.g. `./output/daily`)
+- `TIMELAPSE_WIDTH` - output thumbnail width for timelapse generation
+- `TIMELAPSE_HEIGHT` - output thumbnail height for timelapse generation
 
 ## Usage
 
@@ -207,6 +209,8 @@ The viewer supports:
 The MJPEG stream is CPU-light on Raspberry Pi because frames are served directly as multipart JPEG (no video transcoding pipeline).
 
 In the dashboard Timelapse panel, use `View Timelapse File`, `View GIF`, or `View MP4` after generation completes.
+
+In `Config`, set `Timelapse width` and `Timelapse height` to control timelapse generation resolution.
 
 BirdCam also supports daily scheduled timelapse exports:
 

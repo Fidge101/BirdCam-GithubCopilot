@@ -510,6 +510,16 @@
           <label for="maxFramesInput">Max frames</label>
           <input id="maxFramesInput" type="number" min="1" value="100" />
         </div>
+        <div class="row" style="margin-top:4px;">
+          <div class="field" style="margin:0; flex: 1;">
+            <label for="timelapseWidthInput">Timelapse width</label>
+            <input id="timelapseWidthInput" type="number" min="64" max="3840" value="320" />
+          </div>
+          <div class="field" style="margin:0; flex: 1;">
+            <label for="timelapseHeightInput">Timelapse height</label>
+            <input id="timelapseHeightInput" type="number" min="64" max="2160" value="180" />
+          </div>
+        </div>
         <div class="row" style="margin-top:8px;">
           <button id="saveConfigBtn" class="btn cyan">Save Config</button>
           <span id="configMsg" class="metric"></span>
@@ -673,9 +683,13 @@
           const slider = document.getElementById('intervalSlider');
           const label = document.getElementById('intervalLabel');
           const maxFrames = document.getElementById('maxFramesInput');
+          const timelapseWidth = document.getElementById('timelapseWidthInput');
+          const timelapseHeight = document.getElementById('timelapseHeightInput');
           slider.value = String(cfg.capture_interval_seconds);
           label.textContent = intervalLabel(cfg.capture_interval_seconds);
           maxFrames.value = String(cfg.max_frames);
+          timelapseWidth.value = String(cfg.timelapse_width ?? 320);
+          timelapseHeight.value = String(cfg.timelapse_height ?? 180);
         } catch (err) {
           showToast(`Config load failed: ${err.message}`, 'warning');
         }
@@ -1137,6 +1151,8 @@
       const intervalSlider = document.getElementById('intervalSlider');
       const intervalLabelEl = document.getElementById('intervalLabel');
       const maxFramesInput = document.getElementById('maxFramesInput');
+      const timelapseWidthInput = document.getElementById('timelapseWidthInput');
+      const timelapseHeightInput = document.getElementById('timelapseHeightInput');
       const saveConfigBtn = document.getElementById('saveConfigBtn');
       const configMsg = document.getElementById('configMsg');
       const captureBtn = document.getElementById('captureBtn');
@@ -1151,6 +1167,8 @@
           const payload = {
             capture_interval_seconds: Number(intervalSlider.value),
             max_frames: Number(maxFramesInput.value),
+            timelapse_width: Number(timelapseWidthInput.value),
+            timelapse_height: Number(timelapseHeightInput.value),
           };
           await api('/api/config', { method: 'POST', body: JSON.stringify(payload) });
           configMsg.textContent = 'Saved';

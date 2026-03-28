@@ -806,6 +806,7 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
                     config.frame_store_dir,
                     config.timelapse_output_path,
                     columns=10,
+                    thumbnail_size=(config.timelapse_width, config.timelapse_height),
                 )
                 state.set_job("completed", f"Timelapse generated at {output_path}")
             except Exception as exc:  # pragma: no cover - defensive logging
@@ -831,6 +832,8 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
                     "port": config.port,
                     "frame_store_dir": str(config.frame_store_dir),
                     "timelapse_output_path": str(config.timelapse_output_path),
+                    "timelapse_width": config.timelapse_width,
+                    "timelapse_height": config.timelapse_height,
                 }
             )
 
@@ -838,25 +841,54 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
         try:
             capture_interval = int(payload["capture_interval_seconds"])
             max_frames = int(payload["max_frames"])
+            timelapse_width = int(payload.get("timelapse_width", config.timelapse_width))
+            timelapse_height = int(payload.get("timelapse_height", config.timelapse_height))
         except (KeyError, TypeError, ValueError):
-            return jsonify({"ok": False, "error": "capture_interval_seconds and max_frames must be integers"}), 400
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "capture_interval_seconds, max_frames, timelapse_width, and timelapse_height must be integers",
+                }
+            ), 400
 
         if capture_interval < 10 or capture_interval > 3600:
             return jsonify({"ok": False, "error": "capture_interval_seconds must be between 10 and 3600"}), 400
         if max_frames <= 0:
             return jsonify({"ok": False, "error": "max_frames must be greater than zero"}), 400
+        if timelapse_width < 64 or timelapse_width > 3840:
+            return jsonify({"ok": False, "error": "timelapse_width must be between 64 and 3840"}), 400
+        if timelapse_height < 64 or timelapse_height > 2160:
+            return jsonify({"ok": False, "error": "timelapse_height must be between 64 and 2160"}), 400
 
         config.capture_interval_seconds = capture_interval
         config.max_frames = max_frames
+        config.timelapse_width = timelapse_width
+        config.timelapse_height = timelapse_height
         _update_env_file(
             config.env_path,
             {
                 "CAPTURE_INTERVAL_SECONDS": str(capture_interval),
                 "MAX_FRAMES": str(max_frames),
+                "TIMELAPSE_WIDTH": str(timelapse_width),
+                "TIMELAPSE_HEIGHT": str(timelapse_height),
             },
         )
-        LOGGER.info("Updated runtime config: capture_interval_seconds=%s, max_frames=%s", capture_interval, max_frames)
-        return jsonify({"ok": True, "capture_interval_seconds": capture_interval, "max_frames": max_frames})
+        LOGGER.info(
+            "Updated runtime config: capture_interval_seconds=%s, max_frames=%s, timelapse=%sx%s",
+            capture_interval,
+            max_frames,
+            timelapse_width,
+            timelapse_height,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "capture_interval_seconds": capture_interval,
+                "max_frames": max_frames,
+                "timelapse_width": timelapse_width,
+                "timelapse_height": timelapse_height,
+            }
+        )
 
     @app.get("/api/logs/stream")
     def api_logs_stream() -> Response:

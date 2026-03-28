@@ -95,7 +95,12 @@ def main() -> int:
     stop_event = threading.Event()
 
     if args.timelapse:
-        generate_timelapse(config.frame_store_dir, config.timelapse_output_path, columns=args.columns)
+        generate_timelapse(
+            config.frame_store_dir,
+            config.timelapse_output_path,
+            columns=args.columns,
+            thumbnail_size=(config.timelapse_width, config.timelapse_height),
+        )
         return 0
 
     camera_stream = CameraStream(config.rtsp_url)

@@ -41,6 +41,8 @@ class AppConfig:
     daily_export_enabled: bool
     daily_export_time: str
     daily_export_dir: Path
+    timelapse_width: int
+    timelapse_height: int
 
 
 def _parse_bool(value: str | None, default: bool) -> bool:
@@ -93,6 +95,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     daily_export_enabled = _parse_bool(os.getenv("DAILY_EXPORT_ENABLED"), True)
     daily_export_time = os.getenv("DAILY_EXPORT_TIME", "00:10").strip()
     daily_export_dir_raw = Path(os.getenv("DAILY_EXPORT_DIR", "./output/daily"))
+    timelapse_width = int(os.getenv("TIMELAPSE_WIDTH", "320"))
+    timelapse_height = int(os.getenv("TIMELAPSE_HEIGHT", "180"))
 
     timelapse_output_path = (
         timelapse_output_path_raw
@@ -117,6 +121,10 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         raise ValueError("STREAM_QUALITY must be between 0 and 100")
     if not 1 <= port <= 65535:
         raise ValueError("PORT must be between 1 and 65535")
+    if timelapse_width < 64 or timelapse_width > 3840:
+        raise ValueError("TIMELAPSE_WIDTH must be between 64 and 3840")
+    if timelapse_height < 64 or timelapse_height > 2160:
+        raise ValueError("TIMELAPSE_HEIGHT must be between 64 and 2160")
     try:
         datetime.strptime(daily_export_time, "%H:%M")
     except ValueError as exc:
@@ -149,4 +157,6 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         daily_export_enabled=daily_export_enabled,
         daily_export_time=daily_export_time,
         daily_export_dir=daily_export_dir,
+        timelapse_width=timelapse_width,
+        timelapse_height=timelapse_height,
     )
