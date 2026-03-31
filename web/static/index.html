@@ -208,8 +208,8 @@
 
     .frames-head { display: flex; justify-content: space-between; align-items: center; }
     .frames-head-actions { display: flex; align-items: center; gap: 8px; }
-    .timelapse-actions { display: flex; gap: 8px; }
-    .timelapse-actions .btn { flex: 1; }
+    .timelapse-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .timelapse-actions .btn { flex: 1; min-width: 120px; }
     .export-browser {
       display: grid;
       gap: 8px;
@@ -223,6 +223,16 @@
       font-size: 11px;
     }
     #exportDateSelect {
+      width: 100%;
+      background: #0f1315;
+      color: var(--text);
+      border: 1px solid #2a3035;
+      border-radius: 6px;
+      padding: 7px;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    #frameDateSelect {
       width: 100%;
       background: #0f1315;
       color: var(--text);
@@ -592,9 +602,21 @@
         </div>
         <a href="/viewer" class="btn">Open Image Viewer</a>
       </div>
-      <button id="timelapseBtn" class="btn">Generate Timelapse<span id="timelapseSpin" style="display:none" class="spinner"></span></button>
+      <div class="export-browser">
+        <label for="frameDateSelect">Source Images By Date</label>
+        <div class="row">
+          <select id="frameDateSelect"></select>
+          <button id="refreshFrameDatesBtn" class="btn">Refresh</button>
+        </div>
+        <div id="timelapseStatusText" class="metric">Use a date to filter the gallery and generate exports for that day.</div>
+      </div>
       <div class="row timelapse-actions">
-        <button id="viewTimelapseBtn" class="btn" disabled>View Timelapse File</button>
+        <button id="timelapseSheetBtn" class="btn">Generate Sheet<span id="timelapseSpin" style="display:none" class="spinner"></span></button>
+        <button id="timelapseGifBtn" class="btn">Generate GIF</button>
+        <button id="timelapseMp4Btn" class="btn">Generate MP4</button>
+      </div>
+      <div class="row timelapse-actions">
+        <button id="viewTimelapseBtn" class="btn" disabled>View Sheet</button>
         <button id="viewTimelapseGifBtn" class="btn" disabled>View GIF</button>
         <button id="viewTimelapseMp4Btn" class="btn" disabled>View MP4</button>
       </div>
@@ -845,6 +867,39 @@
       const lightbox = document.getElementById('lightbox');
       const lightboxImg = document.getElementById('lightboxImg');
       const clearFramesBtn = document.getElementById('clearFramesBtn');
+      const frameDateSelect = document.getElementById('frameDateSelect');
+      const refreshFrameDatesBtn = document.getElementById('refreshFrameDatesBtn');
+
+      const selectedDateQuery = () => {
+        const value = frameDateSelect.value;
+        return value ? `?date=${encodeURIComponent(value)}` : '';
+      };
+
+      const loadFrameDates = async () => {
+        try {
+          const dates = await api('/api/frames/dates');
+          const previousValue = frameDateSelect.value;
+          frameDateSelect.innerHTML = '';
+
+          const allOption = document.createElement('option');
+          allOption.value = '';
+          allOption.textContent = 'All images';
+          frameDateSelect.appendChild(allOption);
+
+          dates.forEach((entry) => {
+            const option = document.createElement('option');
+            option.value = entry.date;
+            option.textContent = `${entry.date} (${entry.count} images)`;
+            frameDateSelect.appendChild(option);
+          });
+
+          if ([...frameDateSelect.options].some((option) => option.value === previousValue)) {
+            frameDateSelect.value = previousValue;
+          }
+        } catch (err) {
+          showToast(`Frame dates failed: ${err.message}`, 'warning');
+        }
+      };
 
       const openLightbox = (src) => {
         lightboxImg.src = src;
@@ -857,7 +912,7 @@
 
       const renderFrames = async () => {
         try {
-          const frames = await api('/api/frames');
+          const frames = await api(`/api/frames${selectedDateQuery()}`);
           grid.innerHTML = '';
           for (const frame of frames) {
             const card = document.createElement('div');
@@ -904,15 +959,34 @@
         try {
           await api('/api/frames', { method: 'DELETE' });
           showToast('All frames cleared', 'success');
+          await loadFrameDates();
           renderFrames();
         } catch (err) {
           showToast(`Clear failed: ${err.message}`, 'error');
         }
       });
 
+      frameDateSelect.addEventListener('change', () => {
+        renderFrames();
+        if (window.onFrameDateChanged) {
+          window.onFrameDateChanged(frameDateSelect.value);
+        }
+      });
+
+      refreshFrameDatesBtn.addEventListener('click', async () => {
+        await loadFrameDates();
+        renderFrames();
+        if (window.onFrameDateChanged) {
+          window.onFrameDateChanged(frameDateSelect.value);
+        }
+      });
+
       window.refreshFrames = renderFrames;
-      renderFrames();
+      window.getSelectedFrameDate = () => frameDateSelect.value;
+      window.refreshFrameDates = loadFrameDates;
+      loadFrameDates().then(renderFrames);
       setInterval(renderFrames, 8000);
+      setInterval(loadFrameDates, 30000);
     }
 
     /*
@@ -922,12 +996,16 @@
       Why: allows on-demand timelapse generation without shell access.
     */
     function initTimelapse() {
-      const btn = document.getElementById('timelapseBtn');
+      const sheetBtn = document.getElementById('timelapseSheetBtn');
+      const gifBtn = document.getElementById('timelapseGifBtn');
+      const mp4Btn = document.getElementById('timelapseMp4Btn');
       const spin = document.getElementById('timelapseSpin');
+      const statusText = document.getElementById('timelapseStatusText');
       const preview = document.getElementById('timelapsePreview');
       const viewBtn = document.getElementById('viewTimelapseBtn');
       const viewGifBtn = document.getElementById('viewTimelapseGifBtn');
       const viewMp4Btn = document.getElementById('viewTimelapseMp4Btn');
+      const frameDateSelect = document.getElementById('frameDateSelect');
       const exportDateSelect = document.getElementById('exportDateSelect');
       const exportStartDateSelect = document.getElementById('exportStartDateSelect');
       const exportEndDateSelect = document.getElementById('exportEndDateSelect');
@@ -938,6 +1016,22 @@
       const exportFileList = document.getElementById('exportFileList');
       const lightbox = document.getElementById('lightbox');
       const lightboxImg = document.getElementById('lightboxImg');
+
+      const getSelectedDate = () => {
+        const selected = typeof window.getSelectedFrameDate === 'function' ? window.getSelectedFrameDate() : frameDateSelect?.value;
+        return selected || '';
+      };
+
+      const scopeQuery = () => {
+        const selectedDate = getSelectedDate();
+        return selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : '';
+      };
+
+      const setGenerateButtonsDisabled = (disabled) => {
+        sheetBtn.disabled = disabled;
+        gifBtn.disabled = disabled;
+        mp4Btn.disabled = disabled;
+      };
 
       const syncMergeDownloadState = () => {
         const start = exportStartDateSelect.value;
@@ -1024,6 +1118,7 @@
       const loadExportDates = async () => {
         try {
           const dates = await api('/api/timelapse/exports/dates');
+          const selectedFrameDate = getSelectedDate();
           const previousSingleDate = exportDateSelect.value;
           const previousStartDate = exportStartDateSelect.value;
           const previousEndDate = exportEndDateSelect.value;
@@ -1073,6 +1168,9 @@
           if (previousSingleDate && dates.some((item) => item.date === previousSingleDate)) {
             exportDateSelect.value = previousSingleDate;
           }
+          if (selectedFrameDate && dates.some((item) => item.date === selectedFrameDate)) {
+            exportDateSelect.value = selectedFrameDate;
+          }
           if (previousStartDate && dates.some((item) => item.date === previousStartDate)) {
             exportStartDateSelect.value = previousStartDate;
           }
@@ -1110,7 +1208,7 @@
 
       const syncTimelapseButtons = async () => {
         try {
-          const info = await api('/api/timelapse');
+          const info = await api(`/api/timelapse${scopeQuery()}`);
           viewBtn.disabled = !info.jpg_exists;
           viewGifBtn.disabled = !info.gif_exists;
           viewMp4Btn.disabled = !info.mp4_exists;
@@ -1123,7 +1221,9 @@
 
       const loadPreview = async () => {
         preview.style.display = 'none';
-        preview.src = `/api/timelapse/preview?t=${Date.now()}`;
+        const query = scopeQuery();
+        const prefix = query ? `${query}&` : '?';
+        preview.src = `/api/timelapse/preview${prefix}t=${Date.now()}`;
         await syncTimelapseButtons();
         await loadExportDates();
       };
@@ -1135,21 +1235,45 @@
         preview.style.display = 'none';
       });
       preview.addEventListener('click', () => {
-        lightboxImg.src = `/api/timelapse/preview?t=${Date.now()}`;
+        const query = scopeQuery();
+        const prefix = query ? `${query}&` : '?';
+        lightboxImg.src = `/api/timelapse/preview${prefix}t=${Date.now()}`;
         lightbox.style.display = 'grid';
       });
 
       viewBtn.addEventListener('click', () => {
-        window.open('/api/timelapse/file', '_blank', 'noopener');
+        window.open(`/api/timelapse/file${scopeQuery()}`, '_blank', 'noopener');
       });
 
       viewGifBtn.addEventListener('click', () => {
-        window.open('/api/timelapse/file/gif', '_blank', 'noopener');
+        window.open(`/api/timelapse/file/gif${scopeQuery()}`, '_blank', 'noopener');
       });
 
       viewMp4Btn.addEventListener('click', () => {
-        window.open('/api/timelapse/file/mp4', '_blank', 'noopener');
+        window.open(`/api/timelapse/file/mp4${scopeQuery()}`, '_blank', 'noopener');
       });
+
+      const startTimelapseJob = async (output) => {
+        const selectedDate = getSelectedDate();
+        const scopeLabel = selectedDate || 'all images';
+        try {
+          const result = await api('/api/timelapse/generate', {
+            method: 'POST',
+            body: JSON.stringify({ output, date: selectedDate || null }),
+          });
+          if (result.status === 'running') {
+            spin.style.display = 'inline-block';
+            statusText.textContent = `Generating ${output.toUpperCase()} for ${scopeLabel}...`;
+            setGenerateButtonsDisabled(true);
+            if (!state.timelapsePollHandle) {
+              state.timelapsePollHandle = setInterval(pollJob, 1500);
+            }
+          }
+          showToast(`${output.toUpperCase()} export job started`, 'warning');
+        } catch (err) {
+          showToast(`Timelapse start failed: ${err.message}`, 'error');
+        }
+      };
 
       exportDateSelect.addEventListener('change', () => {
         loadExportFilesForSelectedDate();
@@ -1214,14 +1338,17 @@
           const job = status.timelapse_job || {};
           const running = job.status === 'running';
           spin.style.display = running ? 'inline-block' : 'none';
+          statusText.textContent = job.message || 'Use a date to filter the gallery and generate exports for that day.';
           if (job.status === 'completed') {
             showToast('Timelapse generated', 'success');
+            setGenerateButtonsDisabled(false);
             loadPreview();
             clearInterval(state.timelapsePollHandle);
             state.timelapsePollHandle = null;
           }
           if (job.status === 'error') {
             showToast(`Timelapse error: ${job.message}`, 'error');
+            setGenerateButtonsDisabled(false);
             clearInterval(state.timelapsePollHandle);
             state.timelapsePollHandle = null;
           }
@@ -1230,20 +1357,17 @@
         }
       };
 
-      btn.addEventListener('click', async () => {
-        try {
-          const result = await api('/api/timelapse/generate', { method: 'POST' });
-          if (result.status === 'running') {
-            spin.style.display = 'inline-block';
-            if (!state.timelapsePollHandle) {
-              state.timelapsePollHandle = setInterval(pollJob, 1500);
-            }
-          }
-          showToast('Timelapse job started', 'warning');
-        } catch (err) {
-          showToast(`Timelapse start failed: ${err.message}`, 'error');
+      sheetBtn.addEventListener('click', () => startTimelapseJob('sheet'));
+      gifBtn.addEventListener('click', () => startTimelapseJob('gif'));
+      mp4Btn.addEventListener('click', () => startTimelapseJob('mp4'));
+
+      window.onFrameDateChanged = async (selectedDate) => {
+        if (selectedDate && [...exportDateSelect.options].some((option) => option.value === selectedDate)) {
+          exportDateSelect.value = selectedDate;
+          await loadExportFilesForSelectedDate();
         }
-      });
+        await loadPreview();
+      };
 
       loadPreview();
       setInterval(syncTimelapseButtons, 8000);

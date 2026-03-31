@@ -56,6 +56,59 @@ class CameraStream:
         self._lock = threading.Lock()
         self.blank_frame_reconnect_threshold = max(1, int(blank_frame_reconnect_threshold))
         self._consecutive_blank_frames = 0
+        self._previous_frame_sample: np.ndarray | None = None
+        self._consecutive_frozen_frames = 0
+        self._black_frame_brightness_threshold = 8.0
+        self._frozen_frame_threshold = 15
+        self._frozen_frame_difference_threshold = 1.0
+
+    def _reset_health_tracking(self) -> None:
+        """Reset counters used to detect unhealthy stream output."""
+
+        self._consecutive_blank_frames = 0
+        self._consecutive_frozen_frames = 0
+        self._previous_frame_sample = None
+
+    def _build_frame_sample(self, frame: np.ndarray) -> np.ndarray:
+        """Create a small grayscale sample for inexpensive health checks."""
+
+        grayscale = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return cv2.resize(grayscale, (32, 18), interpolation=cv2.INTER_AREA)
+
+    def _frame_is_healthy(self, frame: np.ndarray | None) -> tuple[bool, str | None]:
+        """Return whether a frame looks usable for display and capture."""
+
+        if frame is None or frame.size == 0:
+            self._consecutive_frozen_frames = 0
+            return False, "empty frame"
+
+        sample = self._build_frame_sample(frame)
+        mean_brightness = float(sample.mean())
+        if mean_brightness <= self._black_frame_brightness_threshold:
+            self._consecutive_frozen_frames = 0
+            self._previous_frame_sample = sample
+            return False, f"black frame (mean brightness {mean_brightness:.1f})"
+
+        if self._previous_frame_sample is not None:
+            difference = float(
+                np.mean(
+                    np.abs(sample.astype(np.int16) - self._previous_frame_sample.astype(np.int16))
+                )
+            )
+            if difference <= self._frozen_frame_difference_threshold:
+                self._consecutive_frozen_frames += 1
+                self._previous_frame_sample = sample
+                if self._consecutive_frozen_frames >= self._frozen_frame_threshold:
+                    return False, (
+                        f"frozen frame sequence ({self._consecutive_frozen_frames} frames, diff {difference:.2f})"
+                    )
+            else:
+                self._consecutive_frozen_frames = 0
+        else:
+            self._consecutive_frozen_frames = 0
+
+        self._previous_frame_sample = sample
+        return True, None
 
     def connect(self) -> bool:
         """Open the RTSP stream and report whether the connection succeeded.
@@ -75,7 +128,7 @@ class CameraStream:
                 LOGGER.error("Failed to open RTSP stream: %s", self._safe_rtsp_url)
                 return False
 
-            self._consecutive_blank_frames = 0
+            self._reset_health_tracking()
             LOGGER.info("Connected to camera stream")
             return True
 
@@ -107,17 +160,30 @@ class CameraStream:
         with self._lock:
             if not self.capture.isOpened():
                 LOGGER.warning("RTSP stream is not open when attempting to read")
+                self._consecutive_blank_frames += 1
             else:
                 success, frame = self.capture.read()
                 if success and frame is not None:
-                    self._consecutive_blank_frames = 0
-                    return frame
-                self._consecutive_blank_frames += 1
-                LOGGER.warning(
-                    "Failed to read frame (%s/%s before reconnect)",
-                    self._consecutive_blank_frames,
-                    self.blank_frame_reconnect_threshold,
-                )
+                    healthy, reason = self._frame_is_healthy(frame)
+                    if healthy:
+                        self._consecutive_blank_frames = 0
+                        return frame
+                    self._consecutive_blank_frames += 1
+                    LOGGER.warning(
+                        "Ignoring unhealthy frame (%s/%s before reconnect): %s",
+                        self._consecutive_blank_frames,
+                        self.blank_frame_reconnect_threshold,
+                        reason,
+                    )
+                else:
+                    self._consecutive_frozen_frames = 0
+                    self._previous_frame_sample = None
+                    self._consecutive_blank_frames += 1
+                    LOGGER.warning(
+                        "Failed to read frame (%s/%s before reconnect)",
+                        self._consecutive_blank_frames,
+                        self.blank_frame_reconnect_threshold,
+                    )
 
         if self._consecutive_blank_frames < self.blank_frame_reconnect_threshold:
             return None
@@ -130,8 +196,14 @@ class CameraStream:
             with self._lock:
                 success, frame = self.capture.read()
                 if success and frame is not None:
-                    self._consecutive_blank_frames = 0
-                    return frame
+                    healthy, reason = self._frame_is_healthy(frame)
+                    if healthy:
+                        self._consecutive_blank_frames = 0
+                        return frame
+                    LOGGER.error("Frame read after reconnect was unhealthy: %s", reason)
+                else:
+                    self._consecutive_frozen_frames = 0
+                    self._previous_frame_sample = None
                 LOGGER.error("Frame read failed after reconnect")
 
         return None
@@ -146,5 +218,5 @@ class CameraStream:
         with self._lock:
             if self.capture.isOpened():
                 self.capture.release()
-                self._consecutive_blank_frames = 0
+                self._reset_health_tracking()
                 LOGGER.info("Camera stream released")

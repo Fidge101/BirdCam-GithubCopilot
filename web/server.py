@@ -7,7 +7,7 @@ import socket
 import threading
 import time
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 from collections import deque
@@ -21,7 +21,13 @@ from flask_cors import CORS
 from camera import CameraStream
 from config import AppConfig
 from scheduler import capture_single_frame
-from timelapse import generate_timelapse
+from timelapse import (
+    generate_timelapse,
+    generate_timelapse_from_frames,
+    generate_timelapse_gif_from_frames,
+    generate_timelapse_mp4_from_frames,
+    generate_timelapse_sheet_from_frames,
+)
 
 try:
     import imageio.v2 as imageio
@@ -204,6 +210,40 @@ def _parse_iso_datetime(value: str | None, field_name: str) -> datetime | None:
         return datetime.fromisoformat(value.strip())
     except ValueError as exc:
         raise ValueError(f"Invalid datetime for {field_name}: {value}") from exc
+
+
+def _parse_iso_date(value: str | None, field_name: str) -> date | None:
+    """Parse an ISO-8601 date string for API filtering parameters."""
+
+    if value is None or not value.strip():
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(f"Invalid date for {field_name}: {value}") from exc
+
+
+def _frame_paths_for_date(frame_store_dir: Path, selected_date: date | None) -> list[Path]:
+    """Return sorted frame paths for all frames or one selected date."""
+
+    if selected_date is None:
+        return sorted(frame_store_dir.glob("*.jpg"))
+
+    day_prefix = selected_date.strftime("%Y%m%d_")
+    return sorted(frame_store_dir.glob(f"{day_prefix}*.jpg"))
+
+
+def _timelapse_output_paths(config: AppConfig, selected_date: date | None) -> tuple[Path, Path, Path]:
+    """Return base JPEG, GIF, and MP4 timelapse output paths for a scope."""
+
+    if selected_date is None:
+        jpg_path = config.timelapse_output_path
+    else:
+        jpg_path = config.daily_export_dir / selected_date.isoformat() / "timelapse.jpg"
+
+    gif_path = jpg_path.with_suffix(jpg_path.suffix + ".gif")
+    mp4_path = jpg_path.with_suffix(jpg_path.suffix + ".mp4")
+    return jpg_path, gif_path, mp4_path
 
 
 def _update_env_file(env_path: Path, updates: dict[str, str]) -> None:
@@ -411,6 +451,7 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
         try:
             start_at = _parse_iso_datetime(request.args.get("start"), "start")
             end_at = _parse_iso_datetime(request.args.get("end"), "end")
+            selected_date = _parse_iso_date(request.args.get("date"), "date")
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
@@ -431,6 +472,8 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
             timestamp_iso = _timestamp_from_filename(safe_name, frame_path)
             frame_timestamp = datetime.fromisoformat(timestamp_iso)
 
+            if selected_date is not None and frame_timestamp.date() != selected_date:
+                continue
             if start_at is not None and frame_timestamp < start_at:
                 continue
             if end_at is not None and frame_timestamp > end_at:
@@ -447,6 +490,23 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
             if limit is not None and len(frames) >= limit:
                 break
         return jsonify(frames)
+
+    @app.get("/api/frames/dates")
+    def api_frame_dates() -> Response:
+        """List available capture dates with frame counts for dashboard filters."""
+
+        counts: dict[str, int] = {}
+        for frame_path in sorted(config.frame_store_dir.glob("*.jpg"), reverse=True):
+            timestamp_iso = _timestamp_from_filename(frame_path.name, frame_path)
+            frame_date = datetime.fromisoformat(timestamp_iso).date().isoformat()
+            counts[frame_date] = counts.get(frame_date, 0) + 1
+
+        return jsonify(
+            [
+                {"date": day, "count": count}
+                for day, count in sorted(counts.items(), reverse=True)
+            ]
+        )
 
     @app.get("/api/frames/<path:name>")
     def api_frame_get(name: str) -> Response:
@@ -500,29 +560,42 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
     def api_timelapse_preview() -> Response:
         """Serve the timelapse JPEG contact sheet when it exists."""
 
-        if not config.timelapse_output_path.exists():
+        try:
+            selected_date = _parse_iso_date(request.args.get("date"), "date")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        jpg_path, _, _ = _timelapse_output_paths(config, selected_date)
+        if not jpg_path.exists():
             return jsonify({"ok": False, "error": "Timelapse preview not found"}), 404
-        return send_file(config.timelapse_output_path, mimetype="image/jpeg")
+        return send_file(jpg_path, mimetype="image/jpeg")
 
     @app.get("/api/timelapse")
     def api_timelapse_meta() -> Response:
         """Return timelapse file metadata and direct view/download URLs."""
 
-        jpg_exists = config.timelapse_output_path.exists()
-        gif_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".gif")
+        try:
+            selected_date = _parse_iso_date(request.args.get("date"), "date")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        jpg_path, gif_path, mp4_path = _timelapse_output_paths(config, selected_date)
+        scope_query = f"?date={selected_date.isoformat()}" if selected_date is not None else ""
+
+        jpg_exists = jpg_path.exists()
         gif_exists = gif_path.exists()
-        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
         mp4_exists = mp4_path.exists()
 
         return jsonify(
             {
+                "scope": selected_date.isoformat() if selected_date is not None else "all",
                 "jpg_exists": jpg_exists,
                 "gif_exists": gif_exists,
                 "mp4_exists": mp4_exists,
-                "jpg_url": "/api/timelapse/file",
-                "gif_url": "/api/timelapse/file/gif",
-                "mp4_url": "/api/timelapse/file/mp4",
-                "jpg_name": config.timelapse_output_path.name,
+                "jpg_url": f"/api/timelapse/file{scope_query}",
+                "gif_url": f"/api/timelapse/file/gif{scope_query}",
+                "mp4_url": f"/api/timelapse/file/mp4{scope_query}",
+                "jpg_name": jpg_path.name,
                 "gif_name": gif_path.name,
                 "mp4_name": mp4_path.name,
             }
@@ -771,15 +844,26 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
     def api_timelapse_file() -> Response:
         """Serve the generated timelapse contact sheet file for direct viewing."""
 
-        if not config.timelapse_output_path.exists():
+        try:
+            selected_date = _parse_iso_date(request.args.get("date"), "date")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        jpg_path, _, _ = _timelapse_output_paths(config, selected_date)
+        if not jpg_path.exists():
             return jsonify({"ok": False, "error": "Timelapse file not found"}), 404
-        return send_file(config.timelapse_output_path, mimetype="image/jpeg")
+        return send_file(jpg_path, mimetype="image/jpeg")
 
     @app.get("/api/timelapse/file/gif")
     def api_timelapse_file_gif() -> Response:
         """Serve generated timelapse GIF when available."""
 
-        gif_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".gif")
+        try:
+            selected_date = _parse_iso_date(request.args.get("date"), "date")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        _, gif_path, _ = _timelapse_output_paths(config, selected_date)
         if not gif_path.exists():
             return jsonify({"ok": False, "error": "Timelapse GIF not found"}), 404
         return send_file(gif_path, mimetype="image/gif")
@@ -788,7 +872,12 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
     def api_timelapse_file_mp4() -> Response:
         """Serve generated timelapse MP4 when available."""
 
-        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+        try:
+            selected_date = _parse_iso_date(request.args.get("date"), "date")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        _, _, mp4_path = _timelapse_output_paths(config, selected_date)
         if not mp4_path.exists():
             return jsonify({"ok": False, "error": "Timelapse MP4 not found"}), 404
         return send_file(mp4_path, mimetype="video/mp4")
@@ -797,7 +886,12 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
     def api_timelapse_file_mp4_download() -> Response:
         """Download generated timelapse MP4 as an attachment."""
 
-        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+        try:
+            selected_date = _parse_iso_date(request.args.get("date"), "date")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        _, _, mp4_path = _timelapse_output_paths(config, selected_date)
         if not mp4_path.exists():
             return jsonify({"ok": False, "error": "Timelapse MP4 not found"}), 404
         return send_file(mp4_path, mimetype="video/mp4", as_attachment=True, download_name=mp4_path.name)
@@ -810,16 +904,66 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
         if current["status"] == "running":
             return jsonify({"ok": True, **current})
 
+        payload = request.get_json(silent=True) or {}
+        output_kind = str(payload.get("output", "all")).strip().lower() or "all"
+        selected_date_value = str(payload.get("date", "")).strip() or None
+        if output_kind not in {"sheet", "gif", "mp4", "all"}:
+            return jsonify({"ok": False, "error": "output must be one of: sheet, gif, mp4, all"}), 400
+
+        try:
+            selected_date = _parse_iso_date(selected_date_value, "date")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
         def job() -> None:
-            state.set_job("running", "Generating timelapse")
+            scope_text = selected_date.isoformat() if selected_date is not None else "all images"
+            state.set_job("running", f"Generating {output_kind} export for {scope_text}")
             try:
-                output_path = generate_timelapse(
-                    config.frame_store_dir,
-                    config.timelapse_output_path,
-                    columns=10,
-                    thumbnail_size=(config.timelapse_width, config.timelapse_height),
-                )
-                state.set_job("completed", f"Timelapse generated at {output_path}")
+                frame_paths = _frame_paths_for_date(config.frame_store_dir, selected_date)
+                if not frame_paths:
+                    if selected_date is None:
+                        raise ValueError(f"No JPEG frames found in {config.frame_store_dir}")
+                    raise ValueError(f"No frames found for date {selected_date.isoformat()}")
+
+                jpg_path, gif_path, mp4_path = _timelapse_output_paths(config, selected_date)
+                jpg_path.parent.mkdir(parents=True, exist_ok=True)
+
+                thumbnail_size = (config.timelapse_width, config.timelapse_height)
+                if output_kind == "sheet":
+                    output_path = generate_timelapse_sheet_from_frames(
+                        frame_paths,
+                        jpg_path,
+                        columns=10,
+                        thumbnail_size=thumbnail_size,
+                    )
+                elif output_kind == "gif":
+                    output_path = generate_timelapse_gif_from_frames(
+                        frame_paths,
+                        gif_path,
+                        thumbnail_size=thumbnail_size,
+                    )
+                elif output_kind == "mp4":
+                    output_path = generate_timelapse_mp4_from_frames(
+                        frame_paths,
+                        mp4_path,
+                        thumbnail_size=thumbnail_size,
+                    )
+                elif selected_date is None:
+                    output_path = generate_timelapse(
+                        config.frame_store_dir,
+                        jpg_path,
+                        columns=10,
+                        thumbnail_size=thumbnail_size,
+                    )
+                else:
+                    output_path = generate_timelapse_from_frames(
+                        frame_paths,
+                        jpg_path,
+                        columns=10,
+                        thumbnail_size=thumbnail_size,
+                    )
+
+                state.set_job("completed", f"{output_kind.upper()} export generated at {output_path}")
             except Exception as exc:  # pragma: no cover - defensive logging
                 LOGGER.exception("Timelapse generation failed")
                 state.set_job("error", str(exc))
