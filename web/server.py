@@ -387,6 +387,33 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
 
         return send_from_directory(app.static_folder, "viewer.html")
 
+    @app.route("/live")
+    def live_viewer() -> Response:
+        """Serve on-demand live MJPEG viewer page."""
+
+        return send_from_directory(app.static_folder, "live.html")
+
+    @app.get("/api/stream/snapshot")
+    def stream_snapshot() -> Response:
+        """Serve a single JPEG snapshot for low-frequency dashboard refresh."""
+
+        frame = camera_stream.read_frame()
+        if frame is None:
+            frame = _offline_placeholder_frame()
+
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), int(config.stream_quality)],
+        )
+        if not ok:
+            return jsonify({"ok": False, "error": "Unable to encode snapshot"}), 503
+
+        state.mark_stream_frame()
+        response = Response(encoded.tobytes(), mimetype="image/jpeg")
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
+
     @app.get("/stream")
     def stream() -> Response:
         """Stream MJPEG frames for browser-native live video rendering."""

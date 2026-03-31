@@ -70,6 +70,7 @@ git fetch origin
 git pull --ff-only origin main
 source .venv/bin/activate
 pip install -r requirements.txt
+python main.py --web
 ```
 
 If `git pull --ff-only` fails because of local edits, either commit your changes or discard them before pulling:
@@ -200,6 +201,11 @@ For high-volume frame browsing, open the dedicated image viewer page with large 
 - `http://raspberrypi.local:5000/viewer`
 - `http://<PI_IP_ADDRESS>:5000/viewer`
 
+For on-demand full live streaming in a separate window:
+
+- `http://raspberrypi.local:5000/live`
+- `http://<PI_IP_ADDRESS>:5000/live`
+
 The viewer supports:
 
 - Start/end time filtering
@@ -207,9 +213,11 @@ The viewer supports:
 - Large preview panel for selected frames
 - Fast thumbnail browsing for many images
 
-The MJPEG stream is CPU-light on Raspberry Pi because frames are served directly as multipart JPEG (no video transcoding pipeline).
+The main dashboard feed uses JPEG snapshots refreshed every 5 seconds to reduce RTSP and browser load.
 
-In the dashboard Timelapse panel, use `View Timelapse File`, `View GIF`, or `View MP4` after generation completes.
+Use the dashboard `Open Live Feed` button when you need continuous MJPEG streaming.
+
+In the dashboard Timelapse panel, use `View Sheet`, `Download GIF`, or `Download MP4` after generation completes.
 
 If the live feed goes blank, use the `Reconnect Camera` button in the dashboard status panel to force an RTSP reconnect without restarting the app.
 

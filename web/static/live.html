@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BirdCam Live Feed</title>
+  <style>
+    :root {
+      --bg: #0d0f10;
+      --panel: #161a1d;
+      --text: #d7dadc;
+      --muted: #8e959b;
+      --accent: #f5a623;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 10px;
+      padding: 10px;
+    }
+    .head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid #242a2f;
+      border-radius: 10px;
+      background: var(--panel);
+      font-size: 14px;
+    }
+    .hint { color: var(--muted); }
+    .feed-wrap {
+      position: relative;
+      border: 1px solid #242a2f;
+      border-radius: 10px;
+      background: #000;
+      overflow: hidden;
+      min-height: 280px;
+    }
+    #liveStream {
+      width: 100%;
+      height: calc(100vh - 92px);
+      object-fit: contain;
+      display: block;
+      background: #000;
+    }
+    .label {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid #394147;
+      background: rgba(0,0,0,.5);
+      color: var(--accent);
+      font-size: 12px;
+      z-index: 3;
+    }
+  </style>
+</head>
+<body>
+  <div class="head">
+    <strong>BirdCam Live Feed</strong>
+    <span class="hint">Close this tab/window when finished to reduce load.</span>
+  </div>
+  <div class="feed-wrap">
+    <div class="label">LIVE MJPEG</div>
+    <img id="liveStream" src="/stream" alt="Live camera feed" />
+  </div>
+</body>
+</html>
