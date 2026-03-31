@@ -56,93 +56,62 @@ class CameraStream:
         self._lock = threading.Lock()
         self.blank_frame_reconnect_threshold = max(1, int(blank_frame_reconnect_threshold))
         self._consecutive_blank_frames = 0
-        self._previous_frame_sample: np.ndarray | None = None
         self._previous_timestamp_sample: np.ndarray | None = None
-        self._consecutive_frozen_frames = 0
-        self._black_frame_brightness_threshold = 8.0
-        self._frozen_frame_threshold = 15
-        self._frozen_frame_difference_threshold = 1.0
-        self._timestamp_region_difference_threshold = 2.5
+        self._consecutive_stale_timestamp_checks = 0
+        self._timestamp_region_difference_threshold = 2.2
+        self._stale_timestamp_reconnect_checks = 4
+        self._health_check_interval_seconds = 1.0
+        self._last_health_check_monotonic = 0.0
+        self._reconnect_cooldown_seconds = 8.0
+        self._last_reconnect_attempt_monotonic = 0.0
 
     def _reset_health_tracking(self) -> None:
         """Reset counters used to detect unhealthy stream output."""
 
         self._consecutive_blank_frames = 0
-        self._consecutive_frozen_frames = 0
-        self._previous_frame_sample = None
+        self._consecutive_stale_timestamp_checks = 0
         self._previous_timestamp_sample = None
+        self._last_health_check_monotonic = 0.0
 
-    def _build_frame_sample(self, frame: np.ndarray) -> np.ndarray:
-        """Create a small grayscale sample for inexpensive health checks."""
+    def _can_attempt_reconnect(self, now_monotonic: float) -> bool:
+        """Return True when reconnect cooldown has elapsed."""
 
-        grayscale = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return cv2.resize(grayscale, (32, 18), interpolation=cv2.INTER_AREA)
+        return (now_monotonic - self._last_reconnect_attempt_monotonic) >= self._reconnect_cooldown_seconds
+
+    def _mark_reconnect_attempt(self, now_monotonic: float) -> None:
+        """Record when reconnect was attempted to enforce cooldown."""
+
+        self._last_reconnect_attempt_monotonic = now_monotonic
 
     def _build_timestamp_sample(self, frame: np.ndarray) -> np.ndarray:
-        """Create a grayscale sample from the top-left timestamp overlay region."""
+        """Build a compact grayscale sample from the timestamp overlay area."""
 
         height, width = frame.shape[:2]
-        roi_height = max(16, min(height, int(height * 0.22)))
-        roi_width = max(48, min(width, int(width * 0.45)))
+        roi_height = max(14, min(height, int(height * 0.18)))
+        roi_width = max(40, min(width, int(width * 0.35)))
         roi = frame[0:roi_height, 0:roi_width]
         grayscale = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         return cv2.resize(grayscale, (48, 16), interpolation=cv2.INTER_AREA)
 
-    def _frame_is_healthy(self, frame: np.ndarray | None) -> tuple[bool, str | None]:
-        """Return whether a frame looks usable for display and capture."""
+    def _timestamp_region_advanced(self, frame: np.ndarray) -> bool:
+        """Return True if the timestamp overlay region appears to have changed."""
 
-        if frame is None or frame.size == 0:
-            self._consecutive_frozen_frames = 0
-            return False, "empty frame"
+        if frame.size == 0:
+            self._previous_timestamp_sample = None
+            return False
 
-        sample = self._build_frame_sample(frame)
-        timestamp_sample = self._build_timestamp_sample(frame)
-        mean_brightness = float(sample.mean())
-        if mean_brightness <= self._black_frame_brightness_threshold:
-            self._consecutive_frozen_frames = 0
-            self._previous_frame_sample = sample
-            self._previous_timestamp_sample = timestamp_sample
-            return False, f"black frame (mean brightness {mean_brightness:.1f})"
+        sample = self._build_timestamp_sample(frame)
+        if self._previous_timestamp_sample is None:
+            self._previous_timestamp_sample = sample
+            return True
 
-        if self._previous_frame_sample is not None:
-            frame_difference = float(
-                np.mean(
-                    np.abs(sample.astype(np.int16) - self._previous_frame_sample.astype(np.int16))
-                )
+        difference = float(
+            np.mean(
+                np.abs(sample.astype(np.int16) - self._previous_timestamp_sample.astype(np.int16))
             )
-            timestamp_difference = float("inf")
-            if self._previous_timestamp_sample is not None:
-                timestamp_difference = float(
-                    np.mean(
-                        np.abs(
-                            timestamp_sample.astype(np.int16)
-                            - self._previous_timestamp_sample.astype(np.int16)
-                        )
-                    )
-                )
-
-            looks_frozen = frame_difference <= self._frozen_frame_difference_threshold
-            timestamp_is_advancing = timestamp_difference > self._timestamp_region_difference_threshold
-
-            if looks_frozen and not timestamp_is_advancing:
-                self._consecutive_frozen_frames += 1
-                self._previous_frame_sample = sample
-                self._previous_timestamp_sample = timestamp_sample
-                if self._consecutive_frozen_frames >= self._frozen_frame_threshold:
-                    return False, (
-                        "frozen frame sequence "
-                        f"({self._consecutive_frozen_frames} frames, "
-                        f"frame diff {frame_difference:.2f}, "
-                        f"timestamp diff {timestamp_difference:.2f})"
-                    )
-            else:
-                self._consecutive_frozen_frames = 0
-        else:
-            self._consecutive_frozen_frames = 0
-
-        self._previous_frame_sample = sample
-        self._previous_timestamp_sample = timestamp_sample
-        return True, None
+        )
+        self._previous_timestamp_sample = sample
+        return difference > self._timestamp_region_difference_threshold
 
     def connect(self) -> bool:
         """Open the RTSP stream and report whether the connection succeeded.
@@ -191,27 +160,37 @@ class CameraStream:
         interruptions do not immediately stop the viewer or capture thread.
         """
 
+        reconnect_reason: str | None = None
+        now_monotonic = time.monotonic()
+
         with self._lock:
             if not self.capture.isOpened():
                 LOGGER.warning("RTSP stream is not open when attempting to read")
                 self._consecutive_blank_frames += 1
+                reconnect_reason = "stream closed"
             else:
                 success, frame = self.capture.read()
-                if success and frame is not None:
-                    healthy, reason = self._frame_is_healthy(frame)
-                    if healthy:
-                        self._consecutive_blank_frames = 0
+                if success and frame is not None and frame.size > 0:
+                    self._consecutive_blank_frames = 0
+
+                    if (now_monotonic - self._last_health_check_monotonic) >= self._health_check_interval_seconds:
+                        self._last_health_check_monotonic = now_monotonic
+                        if self._timestamp_region_advanced(frame):
+                            self._consecutive_stale_timestamp_checks = 0
+                        else:
+                            self._consecutive_stale_timestamp_checks += 1
+                            LOGGER.warning(
+                                "Timestamp region unchanged (%s/%s before reconnect)",
+                                self._consecutive_stale_timestamp_checks,
+                                self._stale_timestamp_reconnect_checks,
+                            )
+                            if self._consecutive_stale_timestamp_checks >= self._stale_timestamp_reconnect_checks:
+                                reconnect_reason = "timestamp stalled"
+
+                    if reconnect_reason is None:
                         return frame
-                    self._consecutive_blank_frames += 1
-                    LOGGER.warning(
-                        "Ignoring unhealthy frame (%s/%s before reconnect): %s",
-                        self._consecutive_blank_frames,
-                        self.blank_frame_reconnect_threshold,
-                        reason,
-                    )
                 else:
-                    self._consecutive_frozen_frames = 0
-                    self._previous_frame_sample = None
+                    self._consecutive_stale_timestamp_checks = 0
                     self._previous_timestamp_sample = None
                     self._consecutive_blank_frames += 1
                     LOGGER.warning(
@@ -219,26 +198,34 @@ class CameraStream:
                         self._consecutive_blank_frames,
                         self.blank_frame_reconnect_threshold,
                     )
+                    reconnect_reason = "read failure"
 
-        if self._consecutive_blank_frames < self.blank_frame_reconnect_threshold:
+        if reconnect_reason == "read failure" and self._consecutive_blank_frames < self.blank_frame_reconnect_threshold:
+            return None
+
+        if reconnect_reason is None:
+            return None
+
+        if not self._can_attempt_reconnect(now_monotonic):
+            LOGGER.debug("Reconnect skipped due to cooldown (%s)", reconnect_reason)
             return None
 
         LOGGER.warning(
-            "Reached blank frame reconnect threshold (%s), forcing reconnect",
-            self.blank_frame_reconnect_threshold,
+            "Forcing reconnect (%s)",
+            reconnect_reason,
         )
+        self._mark_reconnect_attempt(now_monotonic)
         if self.reconnect():
             with self._lock:
                 success, frame = self.capture.read()
-                if success and frame is not None:
-                    healthy, reason = self._frame_is_healthy(frame)
-                    if healthy:
-                        self._consecutive_blank_frames = 0
-                        return frame
-                    LOGGER.error("Frame read after reconnect was unhealthy: %s", reason)
+                if success and frame is not None and frame.size > 0:
+                    self._consecutive_blank_frames = 0
+                    self._consecutive_stale_timestamp_checks = 0
+                    self._last_health_check_monotonic = now_monotonic
+                    self._timestamp_region_advanced(frame)
+                    return frame
                 else:
-                    self._consecutive_frozen_frames = 0
-                    self._previous_frame_sample = None
+                    self._consecutive_stale_timestamp_checks = 0
                     self._previous_timestamp_sample = None
                 LOGGER.error("Frame read failed after reconnect")
 
