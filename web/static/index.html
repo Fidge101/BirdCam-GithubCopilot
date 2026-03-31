@@ -617,8 +617,8 @@
       </div>
       <div class="row timelapse-actions">
         <button id="viewTimelapseBtn" class="btn" disabled>View Sheet</button>
-        <button id="viewTimelapseGifBtn" class="btn" disabled>View GIF</button>
-        <button id="viewTimelapseMp4Btn" class="btn" disabled>View MP4</button>
+        <button id="viewTimelapseGifBtn" class="btn" disabled>Download GIF</button>
+        <button id="viewTimelapseMp4Btn" class="btn" disabled>Download MP4</button>
       </div>
       <img id="timelapsePreview" alt="Timelapse preview" style="display:none;width:100%;border:1px solid #2a3035;border-radius:8px;cursor:pointer;" />
       <div class="export-browser">
@@ -1246,11 +1246,11 @@
       });
 
       viewGifBtn.addEventListener('click', () => {
-        window.open(`/api/timelapse/file/gif${scopeQuery()}`, '_blank', 'noopener');
+        window.open(`/api/timelapse/file/gif/download${scopeQuery()}`, '_blank', 'noopener');
       });
 
       viewMp4Btn.addEventListener('click', () => {
-        window.open(`/api/timelapse/file/mp4${scopeQuery()}`, '_blank', 'noopener');
+        window.open(`/api/timelapse/file/mp4/download${scopeQuery()}`, '_blank', 'noopener');
       });
 
       const startTimelapseJob = async (output) => {

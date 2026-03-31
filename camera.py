@@ -57,10 +57,12 @@ class CameraStream:
         self.blank_frame_reconnect_threshold = max(1, int(blank_frame_reconnect_threshold))
         self._consecutive_blank_frames = 0
         self._previous_frame_sample: np.ndarray | None = None
+        self._previous_timestamp_sample: np.ndarray | None = None
         self._consecutive_frozen_frames = 0
         self._black_frame_brightness_threshold = 8.0
         self._frozen_frame_threshold = 15
         self._frozen_frame_difference_threshold = 1.0
+        self._timestamp_region_difference_threshold = 2.5
 
     def _reset_health_tracking(self) -> None:
         """Reset counters used to detect unhealthy stream output."""
@@ -68,12 +70,23 @@ class CameraStream:
         self._consecutive_blank_frames = 0
         self._consecutive_frozen_frames = 0
         self._previous_frame_sample = None
+        self._previous_timestamp_sample = None
 
     def _build_frame_sample(self, frame: np.ndarray) -> np.ndarray:
         """Create a small grayscale sample for inexpensive health checks."""
 
         grayscale = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return cv2.resize(grayscale, (32, 18), interpolation=cv2.INTER_AREA)
+
+    def _build_timestamp_sample(self, frame: np.ndarray) -> np.ndarray:
+        """Create a grayscale sample from the top-left timestamp overlay region."""
+
+        height, width = frame.shape[:2]
+        roi_height = max(16, min(height, int(height * 0.22)))
+        roi_width = max(48, min(width, int(width * 0.45)))
+        roi = frame[0:roi_height, 0:roi_width]
+        grayscale = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        return cv2.resize(grayscale, (48, 16), interpolation=cv2.INTER_AREA)
 
     def _frame_is_healthy(self, frame: np.ndarray | None) -> tuple[bool, str | None]:
         """Return whether a frame looks usable for display and capture."""
@@ -83,24 +96,44 @@ class CameraStream:
             return False, "empty frame"
 
         sample = self._build_frame_sample(frame)
+        timestamp_sample = self._build_timestamp_sample(frame)
         mean_brightness = float(sample.mean())
         if mean_brightness <= self._black_frame_brightness_threshold:
             self._consecutive_frozen_frames = 0
             self._previous_frame_sample = sample
+            self._previous_timestamp_sample = timestamp_sample
             return False, f"black frame (mean brightness {mean_brightness:.1f})"
 
         if self._previous_frame_sample is not None:
-            difference = float(
+            frame_difference = float(
                 np.mean(
                     np.abs(sample.astype(np.int16) - self._previous_frame_sample.astype(np.int16))
                 )
             )
-            if difference <= self._frozen_frame_difference_threshold:
+            timestamp_difference = float("inf")
+            if self._previous_timestamp_sample is not None:
+                timestamp_difference = float(
+                    np.mean(
+                        np.abs(
+                            timestamp_sample.astype(np.int16)
+                            - self._previous_timestamp_sample.astype(np.int16)
+                        )
+                    )
+                )
+
+            looks_frozen = frame_difference <= self._frozen_frame_difference_threshold
+            timestamp_is_advancing = timestamp_difference > self._timestamp_region_difference_threshold
+
+            if looks_frozen and not timestamp_is_advancing:
                 self._consecutive_frozen_frames += 1
                 self._previous_frame_sample = sample
+                self._previous_timestamp_sample = timestamp_sample
                 if self._consecutive_frozen_frames >= self._frozen_frame_threshold:
                     return False, (
-                        f"frozen frame sequence ({self._consecutive_frozen_frames} frames, diff {difference:.2f})"
+                        "frozen frame sequence "
+                        f"({self._consecutive_frozen_frames} frames, "
+                        f"frame diff {frame_difference:.2f}, "
+                        f"timestamp diff {timestamp_difference:.2f})"
                     )
             else:
                 self._consecutive_frozen_frames = 0
@@ -108,6 +141,7 @@ class CameraStream:
             self._consecutive_frozen_frames = 0
 
         self._previous_frame_sample = sample
+        self._previous_timestamp_sample = timestamp_sample
         return True, None
 
     def connect(self) -> bool:
@@ -178,6 +212,7 @@ class CameraStream:
                 else:
                     self._consecutive_frozen_frames = 0
                     self._previous_frame_sample = None
+                    self._previous_timestamp_sample = None
                     self._consecutive_blank_frames += 1
                     LOGGER.warning(
                         "Failed to read frame (%s/%s before reconnect)",
@@ -204,6 +239,7 @@ class CameraStream:
                 else:
                     self._consecutive_frozen_frames = 0
                     self._previous_frame_sample = None
+                    self._previous_timestamp_sample = None
                 LOGGER.error("Frame read failed after reconnect")
 
         return None

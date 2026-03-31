@@ -868,6 +868,20 @@ def create_app(camera_stream: CameraStream, config: AppConfig, stop_event: threa
             return jsonify({"ok": False, "error": "Timelapse GIF not found"}), 404
         return send_file(gif_path, mimetype="image/gif")
 
+    @app.get("/api/timelapse/file/gif/download")
+    def api_timelapse_file_gif_download() -> Response:
+        """Download generated timelapse GIF as an attachment."""
+
+        try:
+            selected_date = _parse_iso_date(request.args.get("date"), "date")
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        _, gif_path, _ = _timelapse_output_paths(config, selected_date)
+        if not gif_path.exists():
+            return jsonify({"ok": False, "error": "Timelapse GIF not found"}), 404
+        return send_file(gif_path, mimetype="image/gif", as_attachment=True, download_name=gif_path.name)
+
     @app.get("/api/timelapse/file/mp4")
     def api_timelapse_file_mp4() -> Response:
         """Serve generated timelapse MP4 when available."""
