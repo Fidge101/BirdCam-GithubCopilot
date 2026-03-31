@@ -111,6 +111,13 @@ def main() -> int:
         logger.error("Unable to connect to camera; exiting")
         return 1
 
+    sd_camera_stream = CameraStream(
+        config.rtsp_url_sd,
+        blank_frame_reconnect_threshold=config.blank_frame_reconnect_threshold,
+    )
+    if not sd_camera_stream.connect():
+        logger.warning("Unable to connect to low-res camera stream; dashboard falls back to HD")
+
     try:
         if args.live:
             run_live_view(camera_stream, stop_event=stop_event)
@@ -118,14 +125,14 @@ def main() -> int:
             _run_capture_only(camera_stream, config, stop_event)
         elif args.web:
             run_scheduler(camera_stream, config, stop_event=stop_event)
-            start_web_server(camera_stream, config, stop_event=stop_event)
+            start_web_server(camera_stream, config, stop_event=stop_event, sd_camera_stream=sd_camera_stream)
             hostname = socket.gethostname()
             logger.info("Dashboard: http://%s.local:%s", hostname, config.port)
             while not stop_event.is_set():
                 time.sleep(0.5)
         elif args.all:
             run_scheduler(camera_stream, config, stop_event=stop_event)
-            start_web_server(camera_stream, config, stop_event=stop_event)
+            start_web_server(camera_stream, config, stop_event=stop_event, sd_camera_stream=sd_camera_stream)
             hostname = socket.gethostname()
             logger.info("Dashboard: http://%s.local:%s", hostname, config.port)
             run_live_view(camera_stream, stop_event=stop_event)
@@ -135,6 +142,7 @@ def main() -> int:
     finally:
         stop_event.set()
         camera_stream.release()
+        sd_camera_stream.release()
 
     return 0
 

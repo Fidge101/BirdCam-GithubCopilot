@@ -34,6 +34,7 @@ class AppConfig:
     frame_store_dir: Path
     max_frames: int
     rtsp_url: str
+    rtsp_url_sd: str
     stream_quality: int
     port: int
     log_file_path: Path
@@ -142,6 +143,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     # Tapo C120 exposes /stream1 as the primary HD RTSP feed; /stream2 is the
     # lower-resolution sub-stream intended for lighter-bandwidth clients.
     rtsp_url = f"rtsp://{camera_user}:{camera_pass}@{camera_ip}/stream1"
+    rtsp_url_sd = f"rtsp://{camera_user}:{camera_pass}@{camera_ip}/stream2"
 
     LOGGER.debug("Configuration loaded for camera at %s", camera_ip)
 
@@ -154,6 +156,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         frame_store_dir=frame_store_dir,
         max_frames=max_frames,
         rtsp_url=rtsp_url,
+        rtsp_url_sd=rtsp_url_sd,
         stream_quality=stream_quality,
         port=port,
         log_file_path=log_file_path,

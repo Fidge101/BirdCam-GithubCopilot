@@ -572,7 +572,7 @@
       <div class="feed-wrap">
         <div class="feed-label">CAM 01 / LIVE</div>
         <button id="openLiveFeedBtn" class="btn feed-live-btn">Open Live Feed</button>
-        <img id="streamImg" src="/api/stream/snapshot" alt="Camera snapshot feed" />
+        <img id="streamImg" src="/stream/sd" alt="Camera live feed" />
         <div id="noSignal">NO SIGNAL</div>
         <div id="watermark" class="watermark">--</div>
       </div>
@@ -774,38 +774,20 @@
       const img = document.getElementById('streamImg');
       const noSignal = document.getElementById('noSignal');
       const openLiveFeedBtn = document.getElementById('openLiveFeedBtn');
-      let snapshotInterval = null;
 
       const setHealth = (ok) => {
         state.streamHealthy = ok;
         noSignal.style.display = ok ? 'none' : 'grid';
       };
 
-      const refreshSnapshot = () => {
-        img.src = `/api/stream/snapshot?t=${Date.now()}`;
-      };
-
       img.addEventListener('load', () => setHealth(true));
-      img.addEventListener('error', () => {
-        setHealth(false);
-        setTimeout(() => {
-          refreshSnapshot();
-        }, 1500);
-      });
+      img.addEventListener('error', () => setHealth(false));
 
       openLiveFeedBtn.addEventListener('click', () => {
         window.open('/live', '_blank', 'noopener');
       });
 
-      refreshSnapshot();
-      snapshotInterval = setInterval(refreshSnapshot, 5000);
-
-      window.addEventListener('beforeunload', () => {
-        if (snapshotInterval) {
-          clearInterval(snapshotInterval);
-          snapshotInterval = null;
-        }
-      });
+      setHealth(true);
     }
 
     /*
