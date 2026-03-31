@@ -519,34 +519,17 @@ def create_app(
             return jsonify({"ok": False, "error": "Unable to reconnect camera stream"}), 503
         return jsonify({"ok": True, "message": "Camera stream reconnected"})
 
-    @app.get("/api/timelapse/preview")
-    def api_timelapse_preview() -> Response:
-        """Serve the timelapse JPEG contact sheet when it exists."""
-
-        if not config.timelapse_output_path.exists():
-            return jsonify({"ok": False, "error": "Timelapse preview not found"}), 404
-        return send_file(config.timelapse_output_path, mimetype="image/jpeg")
-
     @app.get("/api/timelapse")
     def api_timelapse_meta() -> Response:
-        """Return timelapse file metadata and direct view/download URLs."""
+        """Return timelapse MP4 metadata and direct download URL."""
 
-        jpg_exists = config.timelapse_output_path.exists()
-        gif_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".gif")
-        gif_exists = gif_path.exists()
         mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
         mp4_exists = mp4_path.exists()
 
         return jsonify(
             {
-                "jpg_exists": jpg_exists,
-                "gif_exists": gif_exists,
                 "mp4_exists": mp4_exists,
-                "jpg_url": "/api/timelapse/file",
-                "gif_url": "/api/timelapse/file/gif",
                 "mp4_url": "/api/timelapse/file/mp4",
-                "jpg_name": config.timelapse_output_path.name,
-                "gif_name": gif_path.name,
                 "mp4_name": mp4_path.name,
             }
         )
@@ -566,15 +549,11 @@ def create_app(
                 continue
 
             files = [path for path in day_dir.iterdir() if path.is_file()]
-            has_jpg = any(path.name.endswith(".jpg") for path in files)
-            has_gif = any(path.name.endswith(".gif") for path in files)
             has_mp4 = any(path.name.endswith(".mp4") for path in files)
             dates.append(
                 {
                     "date": day_dir.name,
                     "file_count": len(files),
-                    "has_jpg": has_jpg,
-                    "has_gif": has_gif,
                     "has_mp4": has_mp4,
                 }
             )
@@ -789,23 +768,6 @@ def create_app(
             return jsonify({"ok": False, "error": "Merged output not found"}), 404
 
         return send_file(output_path, mimetype="video/mp4", as_attachment=True, download_name=output_path.name)
-
-    @app.get("/api/timelapse/file")
-    def api_timelapse_file() -> Response:
-        """Serve the generated timelapse contact sheet file for direct viewing."""
-
-        if not config.timelapse_output_path.exists():
-            return jsonify({"ok": False, "error": "Timelapse file not found"}), 404
-        return send_file(config.timelapse_output_path, mimetype="image/jpeg")
-
-    @app.get("/api/timelapse/file/gif")
-    def api_timelapse_file_gif() -> Response:
-        """Serve generated timelapse GIF when available."""
-
-        gif_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".gif")
-        if not gif_path.exists():
-            return jsonify({"ok": False, "error": "Timelapse GIF not found"}), 404
-        return send_file(gif_path, mimetype="image/gif")
 
     @app.get("/api/timelapse/file/mp4")
     def api_timelapse_file_mp4() -> Response:

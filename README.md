@@ -1,6 +1,6 @@
 # BirdCam
 
-BirdCam is a Python application for Raspberry Pi that connects to a Tapo C120 over RTSP, shows a live feed, captures timestamped frames on a schedule, and generates a contact-sheet timelapse image.
+BirdCam is a Python application for Raspberry Pi that connects to a Tapo C120 over RTSP, shows a live feed, captures timestamped frames on a schedule, and generates a timelapse MP4.
 
 ## Features
 
@@ -9,7 +9,7 @@ BirdCam is a Python application for Raspberry Pi that connects to a Tapo C120 ov
 - Run a live viewer with timestamp overlay
 - Capture frames in a background thread while the viewer stays open
 - Keep frame storage bounded by deleting the oldest captures
-- Generate a contact-sheet timelapse JPEG plus optional animated GIF and MP4
+- Generate timelapse MP4 exports from captured frames
 - Run a local web dashboard with MJPEG live stream, controls, and log tailing
 
 ## Find The Camera IP
@@ -125,7 +125,7 @@ Required variables:
 - `CAMERA_USER` - RTSP username configured in the Tapo app
 - `CAMERA_PASS` - RTSP password configured in the Tapo app
 - `CAPTURE_INTERVAL_SECONDS` - how often to save a frame
-- `TIMELAPSE_OUTPUT_PATH` - JPEG contact sheet output path
+- `TIMELAPSE_OUTPUT_PATH` - base output path used for generated MP4 (`<TIMELAPSE_OUTPUT_PATH>.mp4`)
 - `FRAME_STORE_DIR` - directory for captured JPEG frames
 - `MAX_FRAMES` - retention cap before oldest frames are deleted
 - `STREAM_QUALITY` - MJPEG JPEG quality (`0-100`, higher = better quality + bandwidth)
@@ -166,18 +166,15 @@ python main.py --all
 
 `--all` also starts the web dashboard server.
 
-Generate the timelapse contact sheet from saved frames:
+Generate the timelapse MP4 from saved frames:
 
 ```bash
 python main.py --timelapse
 ```
 
-When `imageio` + `imageio-ffmpeg` are installed, timelapse generation also writes:
-
-- `<TIMELAPSE_OUTPUT_PATH>.gif`
 - `<TIMELAPSE_OUTPUT_PATH>.mp4`
 
-Override the number of timelapse grid columns:
+Optional legacy flag:
 
 ```bash
 python main.py --timelapse --columns 8
@@ -213,11 +210,11 @@ The viewer supports:
 - Large preview panel for selected frames
 - Fast thumbnail browsing for many images
 
-The main dashboard feed uses JPEG snapshots refreshed every 5 seconds to reduce RTSP and browser load.
+The main dashboard feed uses the lower-resolution MJPEG stream (`/stream2`) for continuous live viewing.
 
-Use the dashboard `Open Live Feed` button when you need continuous MJPEG streaming.
+Use the dashboard `Hi Res` button when you need high-resolution MJPEG streaming (`/stream1`).
 
-In the dashboard Timelapse panel, use `View Sheet`, `Download GIF`, or `Download MP4` after generation completes.
+In the dashboard Timelapse panel, use `Download MP4` after generation completes.
 
 If the live feed goes blank, use the `Reconnect Camera` button in the dashboard status panel to force an RTSP reconnect without restarting the app.
 
@@ -231,7 +228,7 @@ BirdCam also supports daily scheduled timelapse exports:
 
 - At `DAILY_EXPORT_TIME`, it generates an export for the previous day
 - Exports are stored under `DAILY_EXPORT_DIR/YYYY-MM-DD/`
-- Each dated folder can contain `timelapse.jpg`, `timelapse.jpg.gif`, and `timelapse.jpg.mp4`
+- Each dated folder contains MP4 output (for example `timelapse.jpg.mp4`)
 
 Use the dashboard `Daily Exports By Date` picker in the Timelapse panel to browse and open exports by date.
 
@@ -264,7 +261,7 @@ python main.py --web
 3. Generate timelapse and verify outputs:
 
 - click `Generate Timelapse`
-- verify `View Timelapse File`, `View GIF`, and `View MP4` open correctly
+- verify `Download MP4` opens and plays correctly
 
 4. Validate daily exports by date:
 
@@ -292,7 +289,7 @@ Then open `http://localhost:5000` on your local machine.
 - `camera.py` manages the OpenCV RTSP stream and reconnect logic
 - `viewer.py` runs the live display loop
 - `scheduler.py` captures frames in a background thread
-- `timelapse.py` creates the contact-sheet output and optional GIF
+- `timelapse.py` creates MP4 timelapse exports
 - `main.py` provides the CLI entry point
 - `web/server.py` provides Flask APIs, MJPEG stream, and SSE log streaming
 - `web/static/index.html` provides the single-file dashboard UI

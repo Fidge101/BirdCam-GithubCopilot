@@ -571,7 +571,7 @@
     <section class="panel">
       <div class="feed-wrap">
         <div class="feed-label">CAM 01 / LIVE</div>
-        <button id="openLiveFeedBtn" class="btn feed-live-btn">Open Live Feed</button>
+        <button id="openLiveFeedBtn" class="btn feed-live-btn">Hi Res</button>
         <img id="streamImg" src="/stream/sd" alt="Camera live feed" />
         <div id="noSignal">NO SIGNAL</div>
         <div id="watermark" class="watermark">--</div>
@@ -595,16 +595,11 @@
         <div id="timelapseStatusText" class="metric">Use a date to filter the gallery and generate exports for that day.</div>
       </div>
       <div class="row timelapse-actions">
-        <button id="timelapseSheetBtn" class="btn">Generate Sheet<span id="timelapseSpin" style="display:none" class="spinner"></span></button>
-        <button id="timelapseGifBtn" class="btn">Generate GIF</button>
-        <button id="timelapseMp4Btn" class="btn">Generate MP4</button>
+          <button id="timelapseMp4Btn" class="btn">Generate MP4<span id="timelapseSpin" style="display:none" class="spinner"></span></button>
       </div>
       <div class="row timelapse-actions">
-        <button id="viewTimelapseBtn" class="btn" disabled>View Sheet</button>
-        <button id="viewTimelapseGifBtn" class="btn" disabled>Download GIF</button>
         <button id="viewTimelapseMp4Btn" class="btn" disabled>Download MP4</button>
       </div>
-      <img id="timelapsePreview" alt="Timelapse preview" style="display:none;width:100%;border:1px solid #2a3035;border-radius:8px;cursor:pointer;" />
       <div class="export-browser">
         <label for="exportDateSelect">Daily Exports By Date</label>
         <div class="row">
@@ -930,14 +925,9 @@
       Why: allows on-demand timelapse generation without shell access.
     */
     function initTimelapse() {
-      const sheetBtn = document.getElementById('timelapseSheetBtn');
-      const gifBtn = document.getElementById('timelapseGifBtn');
       const mp4Btn = document.getElementById('timelapseMp4Btn');
       const spin = document.getElementById('timelapseSpin');
       const statusText = document.getElementById('timelapseStatusText');
-      const preview = document.getElementById('timelapsePreview');
-      const viewBtn = document.getElementById('viewTimelapseBtn');
-      const viewGifBtn = document.getElementById('viewTimelapseGifBtn');
       const viewMp4Btn = document.getElementById('viewTimelapseMp4Btn');
       const frameDateSelect = document.getElementById('frameDateSelect');
       const exportDateSelect = document.getElementById('exportDateSelect');
@@ -948,8 +938,6 @@
       const mergeStatusText = document.getElementById('mergeStatusText');
       const mergeProgressBar = document.getElementById('mergeProgressBar');
       const exportFileList = document.getElementById('exportFileList');
-      const lightbox = document.getElementById('lightbox');
-      const lightboxImg = document.getElementById('lightboxImg');
 
       const getSelectedDate = () => {
         const selected = typeof window.getSelectedFrameDate === 'function' ? window.getSelectedFrameDate() : frameDateSelect?.value;
@@ -962,8 +950,6 @@
       };
 
       const setGenerateButtonsDisabled = (disabled) => {
-        sheetBtn.disabled = disabled;
-        gifBtn.disabled = disabled;
         mp4Btn.disabled = disabled;
       };
 
@@ -1143,67 +1129,33 @@
       const syncTimelapseButtons = async () => {
         try {
           const info = await api(`/api/timelapse${scopeQuery()}`);
-          viewBtn.disabled = !info.jpg_exists;
-          viewGifBtn.disabled = !info.gif_exists;
           viewMp4Btn.disabled = !info.mp4_exists;
         } catch (_) {
-          viewBtn.disabled = true;
-          viewGifBtn.disabled = true;
           viewMp4Btn.disabled = true;
         }
       };
-
-      const loadPreview = async () => {
-        preview.style.display = 'none';
-        const query = scopeQuery();
-        const prefix = query ? `${query}&` : '?';
-        preview.src = `/api/timelapse/preview${prefix}t=${Date.now()}`;
-        await syncTimelapseButtons();
-        await loadExportDates();
-      };
-
-      preview.addEventListener('load', () => {
-        preview.style.display = 'block';
-      });
-      preview.addEventListener('error', () => {
-        preview.style.display = 'none';
-      });
-      preview.addEventListener('click', () => {
-        const query = scopeQuery();
-        const prefix = query ? `${query}&` : '?';
-        lightboxImg.src = `/api/timelapse/preview${prefix}t=${Date.now()}`;
-        lightbox.style.display = 'grid';
-      });
-
-      viewBtn.addEventListener('click', () => {
-        window.open(`/api/timelapse/file${scopeQuery()}`, '_blank', 'noopener');
-      });
-
-      viewGifBtn.addEventListener('click', () => {
-        window.open(`/api/timelapse/file/gif/download${scopeQuery()}`, '_blank', 'noopener');
-      });
 
       viewMp4Btn.addEventListener('click', () => {
         window.open(`/api/timelapse/file/mp4/download${scopeQuery()}`, '_blank', 'noopener');
       });
 
-      const startTimelapseJob = async (output) => {
+      const startTimelapseJob = async () => {
         const selectedDate = getSelectedDate();
         const scopeLabel = selectedDate || 'all images';
         try {
           const result = await api('/api/timelapse/generate', {
             method: 'POST',
-            body: JSON.stringify({ output, date: selectedDate || null }),
+            body: JSON.stringify({ output: 'mp4', date: selectedDate || null }),
           });
           if (result.status === 'running') {
             spin.style.display = 'inline-block';
-            statusText.textContent = `Generating ${output.toUpperCase()} for ${scopeLabel}...`;
+            statusText.textContent = `Generating MP4 for ${scopeLabel}...`;
             setGenerateButtonsDisabled(true);
             if (!state.timelapsePollHandle) {
               state.timelapsePollHandle = setInterval(pollJob, 1500);
             }
           }
-          showToast(`${output.toUpperCase()} export job started`, 'warning');
+          showToast('MP4 export job started', 'warning');
         } catch (err) {
           showToast(`Timelapse start failed: ${err.message}`, 'error');
         }
@@ -1276,7 +1228,8 @@
           if (job.status === 'completed') {
             showToast('Timelapse generated', 'success');
             setGenerateButtonsDisabled(false);
-            loadPreview();
+            syncTimelapseButtons();
+            loadExportDates();
             clearInterval(state.timelapsePollHandle);
             state.timelapsePollHandle = null;
           }
@@ -1291,19 +1244,19 @@
         }
       };
 
-      sheetBtn.addEventListener('click', () => startTimelapseJob('sheet'));
-      gifBtn.addEventListener('click', () => startTimelapseJob('gif'));
-      mp4Btn.addEventListener('click', () => startTimelapseJob('mp4'));
+      mp4Btn.addEventListener('click', () => startTimelapseJob());
 
       window.onFrameDateChanged = async (selectedDate) => {
         if (selectedDate && [...exportDateSelect.options].some((option) => option.value === selectedDate)) {
           exportDateSelect.value = selectedDate;
           await loadExportFilesForSelectedDate();
         }
-        await loadPreview();
+        await syncTimelapseButtons();
+        await loadExportDates();
       };
 
-      loadPreview();
+      syncTimelapseButtons();
+      loadExportDates();
       setInterval(syncTimelapseButtons, 8000);
       setInterval(loadExportDates, 30000);
       pollMergeStatus();

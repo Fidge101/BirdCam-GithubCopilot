@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     group.add_argument("--live", action="store_true", help="run the live viewer")
     group.add_argument("--capture", action="store_true", help="run the frame capture scheduler")
     group.add_argument("--web", action="store_true", help="run the web dashboard and capture scheduler")
-    group.add_argument("--timelapse", action="store_true", help="generate a timelapse contact sheet")
+    group.add_argument("--timelapse", action="store_true", help="generate a timelapse MP4")
     group.add_argument("--all", action="store_true", help="run live viewer and capture scheduler together")
     parser.add_argument(
         "--columns",
