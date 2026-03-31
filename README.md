@@ -216,7 +216,11 @@ Use the dashboard `Hi Res` button when you need high-resolution MJPEG streaming 
 
 In the dashboard Timelapse panel, use `Download MP4` after generation completes.
 
-If the live feed goes blank, use the `Reconnect Camera` button in the dashboard status panel to force an RTSP reconnect without restarting the app.
+If the live feed goes blank, use the `Reconnect Camera` button in the dashboard status panel to manually reset RTSP streams without restarting the app.
+
+Automatic stream failover/reconnect is disabled; recovery is manual via `Reconnect Camera`.
+
+To prevent spam reconnect loops, the reconnect endpoint enforces a short cooldown between reset requests.
 
 In `Config`, set `Timelapse width` and `Timelapse height` to control timelapse generation resolution.
 

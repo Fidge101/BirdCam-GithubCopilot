@@ -779,7 +779,10 @@
       img.addEventListener('error', () => setHealth(false));
 
       openLiveFeedBtn.addEventListener('click', () => {
-        window.open('/live', '_blank', 'noopener');
+        const liveWindow = window.open('/live', '_blank', 'noopener');
+        if (!liveWindow) {
+          window.location.assign('/live');
+        }
       });
 
       setHealth(true);
@@ -1338,13 +1341,33 @@
         reconnectBtn.disabled = true;
         reconnectBtn.textContent = 'Reconnecting...';
         try {
-          await api('/api/camera/reconnect', { method: 'POST' });
+          const response = await fetch('/api/camera/reconnect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            const errorMessage = payload?.error || `${response.status} ${response.statusText}`;
+            if (response.status === 429 && Number.isFinite(payload?.retry_after_seconds)) {
+              const retryAfter = Math.max(1, Number(payload.retry_after_seconds));
+              reconnectBtn.textContent = `Wait ${retryAfter}s`;
+              showToast(errorMessage, 'warning');
+              setTimeout(() => {
+                reconnectBtn.disabled = false;
+                reconnectBtn.textContent = 'Reconnect Camera';
+              }, retryAfter * 1000);
+              return;
+            }
+            throw new Error(errorMessage);
+          }
           showToast('Camera reconnected', 'success');
         } catch (err) {
           showToast(`Reconnect failed: ${err.message}`, 'error');
         } finally {
-          reconnectBtn.disabled = false;
-          reconnectBtn.textContent = 'Reconnect Camera';
+          if (reconnectBtn.textContent === 'Reconnecting...') {
+            reconnectBtn.disabled = false;
+            reconnectBtn.textContent = 'Reconnect Camera';
+          }
         }
       });
     }

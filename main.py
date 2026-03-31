@@ -116,7 +116,7 @@ def main() -> int:
         blank_frame_reconnect_threshold=config.blank_frame_reconnect_threshold,
     )
     if not sd_camera_stream.connect():
-        logger.warning("Unable to connect to low-res camera stream; dashboard falls back to HD")
+        logger.warning("Unable to connect to low-res camera stream; dashboard low-res feed will remain offline until reconnect")
 
     try:
         if args.live:

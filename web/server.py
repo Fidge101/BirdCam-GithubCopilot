@@ -333,6 +333,9 @@ def create_app(
     app = Flask(__name__, static_folder="static")
     CORS(app)
     state = DashboardState()
+    reconnect_cooldown_seconds = 10
+    last_manual_reconnect_monotonic = 0.0
+    reconnect_lock = threading.Lock()
 
     @app.before_request
     def _log_request() -> None:
@@ -358,12 +361,12 @@ def create_app(
 
         return send_from_directory(app.static_folder, "live.html")
 
-    def _mjpeg_response(stream_source: CameraStream) -> Response:
+    def _mjpeg_response(stream_source: CameraStream | None) -> Response:
         """Build an MJPEG streaming response from a camera source."""
 
         def generate_mjpeg() -> bytes:
             while not stop_event.is_set():
-                frame = stream_source.read_frame()
+                frame = stream_source.read_frame() if stream_source is not None else None
                 if frame is None:
                     frame = _offline_placeholder_frame()
 
@@ -396,8 +399,7 @@ def create_app(
     def stream_sd() -> Response:
         """Stream MJPEG frames for lower-resolution dashboard live view."""
 
-        source = sd_camera_stream if sd_camera_stream is not None else camera_stream
-        return _mjpeg_response(source)
+        return _mjpeg_response(sd_camera_stream)
 
     @app.get("/api/status")
     def api_status() -> Response:
@@ -511,13 +513,38 @@ def create_app(
 
     @app.post("/api/camera/reconnect")
     def api_camera_reconnect() -> Response:
-        """Force RTSP camera reconnect and return updated connection status."""
+        """Force manual RTSP reconnect with cooldown-based anti-spam protection."""
+
+        nonlocal last_manual_reconnect_monotonic
+        now = time.monotonic()
+
+        with reconnect_lock:
+            elapsed = now - last_manual_reconnect_monotonic
+            if elapsed < reconnect_cooldown_seconds:
+                retry_after = int(reconnect_cooldown_seconds - elapsed + 0.999)
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": f"Reconnect cooldown active. Try again in {retry_after}s",
+                            "retry_after_seconds": retry_after,
+                        }
+                    ),
+                    429,
+                )
+            last_manual_reconnect_monotonic = now
 
         LOGGER.warning("Manual camera reconnect requested from dashboard")
-        success = camera_stream.reconnect()
-        if not success:
-            return jsonify({"ok": False, "error": "Unable to reconnect camera stream"}), 503
-        return jsonify({"ok": True, "message": "Camera stream reconnected"})
+        hd_success = camera_stream.reconnect()
+        sd_success = True
+        if sd_camera_stream is not None:
+            sd_success = sd_camera_stream.reconnect()
+
+        if hd_success and sd_success:
+            return jsonify({"ok": True, "message": "Camera streams reconnected"})
+        if hd_success and not sd_success:
+            return jsonify({"ok": False, "error": "HD stream reconnected, but SD stream reconnect failed"}), 503
+        return jsonify({"ok": False, "error": "Unable to reconnect camera stream"}), 503
 
     @app.get("/api/timelapse")
     def api_timelapse_meta() -> Response:
