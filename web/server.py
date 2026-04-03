@@ -7,7 +7,7 @@ import socket
 import threading
 import time
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 from collections import deque
@@ -21,7 +21,7 @@ from flask_cors import CORS
 from camera import CameraStream
 from config import AppConfig
 from scheduler import capture_single_frame
-from timelapse import generate_timelapse
+from timelapse import generate_timelapse, generate_timelapse_from_frames
 
 try:
     import imageio.v2 as imageio
@@ -47,11 +47,16 @@ class DashboardState:
     def __init__(self) -> None:
         self.started_at = time.monotonic()
         self.streamed_frames = 0
-        self.timelapse_job: dict[str, str] = {
+        self.timelapse_job: dict[str, object] = {
             "status": "idle",
             "message": "No timelapse job started",
+            "progress": 0,
+            "queue_length": 0,
+            "scope_date": None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        self.timelapse_queue: deque[str | None] = deque()
+        self.timelapse_worker_active = False
         self.merge_job: dict[str, object] = {
             "job_id": None,
             "status": "idle",
@@ -77,21 +82,85 @@ class DashboardState:
         with self._lock:
             return self.streamed_frames
 
-    def set_job(self, status: str, message: str) -> None:
+    def set_job(
+        self,
+        status: str,
+        message: str,
+        progress: int = 0,
+        queue_length: int | None = None,
+        scope_date: str | None = None,
+    ) -> None:
         """Update timelapse background job status in a thread-safe way."""
 
         with self._lock:
             self.timelapse_job = {
                 "status": status,
                 "message": message,
+                "progress": max(0, min(100, int(progress))),
+                "queue_length": len(self.timelapse_queue) if queue_length is None else max(0, int(queue_length)),
+                "scope_date": scope_date,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
-    def get_job(self) -> dict[str, str]:
+    def update_job(self, updates: dict[str, object]) -> None:
+        """Apply partial updates to timelapse job state."""
+
+        with self._lock:
+            merged = dict(self.timelapse_job)
+            merged.update(updates)
+            if "progress" in merged:
+                merged["progress"] = max(0, min(100, int(merged["progress"])))
+            if "queue_length" not in merged:
+                merged["queue_length"] = len(self.timelapse_queue)
+            merged["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self.timelapse_job = merged
+
+    def get_job(self) -> dict[str, object]:
         """Read current timelapse job state in a thread-safe way."""
 
         with self._lock:
             return dict(self.timelapse_job)
+
+    def enqueue_timelapse_request(self, scope_date: str | None) -> int:
+        """Queue a timelapse request and return 1-based queue position."""
+
+        with self._lock:
+            self.timelapse_queue.append(scope_date)
+            queue_length = len(self.timelapse_queue)
+            if self.timelapse_job.get("status") != "running":
+                self.timelapse_job = {
+                    "status": "queued",
+                    "message": f"Queued MP4 generation ({queue_length} pending)",
+                    "progress": 0,
+                    "queue_length": queue_length,
+                    "scope_date": scope_date,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            else:
+                self.timelapse_job["queue_length"] = queue_length
+                self.timelapse_job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            return queue_length
+
+    def start_timelapse_worker_if_needed(self) -> bool:
+        """Mark timelapse worker active if none is running."""
+
+        with self._lock:
+            if self.timelapse_worker_active:
+                return False
+            self.timelapse_worker_active = True
+            return True
+
+    def pop_timelapse_request_or_stop(self) -> str | None:
+        """Pop next request, or mark worker inactive if queue is empty."""
+
+        with self._lock:
+            if self.timelapse_queue:
+                scope_date = self.timelapse_queue.popleft()
+                self.timelapse_job["queue_length"] = len(self.timelapse_queue)
+                self.timelapse_job["updated_at"] = datetime.now(timezone.utc).isoformat()
+                return scope_date
+            self.timelapse_worker_active = False
+            return None
 
     def set_merge_job(self, payload: dict[str, object]) -> None:
         """Set stitched export merge job state in a thread-safe way."""
@@ -248,6 +317,28 @@ def _safe_export_file_path(export_root: Path, relative_path: str) -> Path:
     if export_root not in candidate.parents and candidate != export_root:
         raise ValueError("Invalid export path")
     return candidate
+
+
+def _parse_scope_date(value: object) -> date | None:
+    """Parse an optional YYYY-MM-DD date used to scope timelapse operations."""
+
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError("date must be in YYYY-MM-DD format") from exc
+
+
+def _timelapse_mp4_path(config: AppConfig, scope_date: date | None) -> Path:
+    """Resolve output MP4 path for global or date-scoped timelapse."""
+
+    if scope_date is None:
+        return config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+    return config.daily_export_dir / scope_date.isoformat() / "timelapse.jpg.mp4"
 
 
 def _stitch_mp4_files(
@@ -550,14 +641,21 @@ def create_app(
     def api_timelapse_meta() -> Response:
         """Return timelapse MP4 metadata and direct download URL."""
 
-        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+        try:
+            scope_date = _parse_scope_date(request.args.get("date"))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        mp4_path = _timelapse_mp4_path(config, scope_date)
         mp4_exists = mp4_path.exists()
+        query_suffix = f"?date={scope_date.isoformat()}" if scope_date is not None else ""
 
         return jsonify(
             {
                 "mp4_exists": mp4_exists,
-                "mp4_url": "/api/timelapse/file/mp4",
+                "mp4_url": f"/api/timelapse/file/mp4{query_suffix}",
                 "mp4_name": mp4_path.name,
+                "scope_date": scope_date.isoformat() if scope_date is not None else None,
             }
         )
 
@@ -800,7 +898,12 @@ def create_app(
     def api_timelapse_file_mp4() -> Response:
         """Serve generated timelapse MP4 when available."""
 
-        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+        try:
+            scope_date = _parse_scope_date(request.args.get("date"))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        mp4_path = _timelapse_mp4_path(config, scope_date)
         if not mp4_path.exists():
             return jsonify({"ok": False, "error": "Timelapse MP4 not found"}), 404
         return send_file(mp4_path, mimetype="video/mp4")
@@ -809,7 +912,12 @@ def create_app(
     def api_timelapse_file_mp4_download() -> Response:
         """Download generated timelapse MP4 as an attachment."""
 
-        mp4_path = config.timelapse_output_path.with_suffix(config.timelapse_output_path.suffix + ".mp4")
+        try:
+            scope_date = _parse_scope_date(request.args.get("date"))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        mp4_path = _timelapse_mp4_path(config, scope_date)
         if not mp4_path.exists():
             return jsonify({"ok": False, "error": "Timelapse MP4 not found"}), 404
         return send_file(mp4_path, mimetype="video/mp4", as_attachment=True, download_name=mp4_path.name)
@@ -818,26 +926,103 @@ def create_app(
     def api_timelapse_generate() -> Response:
         """Start timelapse generation job and return current job status."""
 
-        current = state.get_job()
-        if current["status"] == "running":
-            return jsonify({"ok": True, **current})
+        payload = request.get_json(silent=True) or {}
+        try:
+            requested_date = _parse_scope_date(payload.get("date"))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
 
-        def job() -> None:
-            state.set_job("running", "Generating timelapse")
-            try:
-                output_path = generate_timelapse(
-                    config.frame_store_dir,
-                    config.timelapse_output_path,
-                    columns=10,
-                    thumbnail_size=(config.timelapse_width, config.timelapse_height),
+        was_running = state.get_job().get("status") == "running"
+        scope_date = requested_date.isoformat() if requested_date is not None else None
+        queue_position = state.enqueue_timelapse_request(scope_date)
+
+        def run_timelapse_worker() -> None:
+            while True:
+                next_scope_date = state.pop_timelapse_request_or_stop()
+                if next_scope_date is None:
+                    return
+
+                scope_label = next_scope_date or "all images"
+                remaining_queue = state.get_job().get("queue_length", 0)
+                state.set_job(
+                    "running",
+                    f"Generating MP4 for {scope_label}",
+                    progress=2,
+                    queue_length=int(remaining_queue),
+                    scope_date=next_scope_date,
                 )
-                state.set_job("completed", f"Timelapse generated at {output_path}")
-            except Exception as exc:  # pragma: no cover - defensive logging
-                LOGGER.exception("Timelapse generation failed")
-                state.set_job("error", str(exc))
 
-        threading.Thread(target=job, name="timelapse-job", daemon=True).start()
-        return jsonify({"ok": True, **state.get_job()})
+                try:
+                    def on_progress(done: int, total: int) -> None:
+                        percent = 5 if total <= 0 else min(95, max(5, int((done / total) * 95)))
+                        state.update_job(
+                            {
+                                "status": "running",
+                                "message": f"Generating MP4 for {scope_label}: {done}/{total}",
+                                "progress": percent,
+                                "scope_date": next_scope_date,
+                            }
+                        )
+
+                    if next_scope_date:
+                        target_date = datetime.strptime(next_scope_date, "%Y-%m-%d").date()
+                        day_prefix = target_date.strftime("%Y%m%d_")
+                        scoped_frames = sorted(config.frame_store_dir.glob(f"{day_prefix}*.jpg"))
+                        output_base = config.daily_export_dir / target_date.isoformat() / "timelapse.jpg"
+                        output_path = generate_timelapse_from_frames(
+                            scoped_frames,
+                            output_base,
+                            columns=10,
+                            thumbnail_size=(config.timelapse_width, config.timelapse_height),
+                            on_progress=on_progress,
+                        )
+                    else:
+                        output_path = generate_timelapse(
+                            config.frame_store_dir,
+                            config.timelapse_output_path,
+                            columns=10,
+                            thumbnail_size=(config.timelapse_width, config.timelapse_height),
+                            on_progress=on_progress,
+                        )
+
+                    queue_len = int(state.get_job().get("queue_length", 0))
+                    state.set_job(
+                        "completed",
+                        f"Timelapse generated at {output_path}",
+                        progress=100,
+                        queue_length=queue_len,
+                        scope_date=next_scope_date,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive logging
+                    LOGGER.exception("Timelapse generation failed")
+                    queue_len = int(state.get_job().get("queue_length", 0))
+                    state.set_job(
+                        "error",
+                        str(exc),
+                        progress=0,
+                        queue_length=queue_len,
+                        scope_date=next_scope_date,
+                    )
+
+        if state.start_timelapse_worker_if_needed():
+            threading.Thread(target=run_timelapse_worker, name="timelapse-job", daemon=True).start()
+
+        response_status = "queued" if was_running or queue_position > 1 else "running"
+        response_message = (
+            f"Queued MP4 generation for {scope_date or 'all images'} (position {queue_position})"
+            if queue_position > 1
+            else f"Starting MP4 generation for {scope_date or 'all images'}"
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "status": response_status,
+                "message": response_message,
+                "progress": 0,
+                "queue_length": queue_position,
+                "scope_date": scope_date,
+            }
+        )
 
     @app.route("/api/config", methods=["GET", "POST"])
     def api_config() -> Response:

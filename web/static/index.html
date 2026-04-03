@@ -291,6 +291,24 @@
       background: linear-gradient(90deg, #f5a623, #00c8b4);
       transition: width 200ms ease;
     }
+    .timelapse-progress {
+      width: 100%;
+      height: 8px;
+      background: #1d2327;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid #2a3035;
+      margin-top: 8px;
+    }
+    #timelapseProgressBar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #f5a623, #00c8b4);
+      transition: width 200ms ease;
+    }
+    #timelapseQueueText {
+      margin-top: 6px;
+    }
     #frameCountBadge {
       border: 1px solid #2b3237;
       border-radius: 999px;
@@ -593,6 +611,8 @@
           <button id="refreshFrameDatesBtn" class="btn">Refresh</button>
         </div>
         <div id="timelapseStatusText" class="metric">Use a date to filter the gallery and generate exports for that day.</div>
+        <div class="timelapse-progress"><div id="timelapseProgressBar"></div></div>
+        <div id="timelapseQueueText" class="metric">Queue: 0 pending</div>
       </div>
       <div class="row timelapse-actions">
           <button id="timelapseMp4Btn" class="btn">Generate MP4<span id="timelapseSpin" style="display:none" class="spinner"></span></button>
@@ -932,6 +952,8 @@
       const spin = document.getElementById('timelapseSpin');
       const statusText = document.getElementById('timelapseStatusText');
       const viewMp4Btn = document.getElementById('viewTimelapseMp4Btn');
+      const timelapseProgressBar = document.getElementById('timelapseProgressBar');
+      const timelapseQueueText = document.getElementById('timelapseQueueText');
       const frameDateSelect = document.getElementById('frameDateSelect');
       const exportDateSelect = document.getElementById('exportDateSelect');
       const exportStartDateSelect = document.getElementById('exportStartDateSelect');
@@ -954,6 +976,21 @@
 
       const setGenerateButtonsDisabled = (disabled) => {
         mp4Btn.disabled = disabled;
+      };
+
+      const renderTimelapseJob = (job) => {
+        const status = job?.status || 'idle';
+        const message = job?.message || 'Use a date to filter the gallery and generate exports for that day.';
+        const progress = Math.max(0, Math.min(100, Number(job?.progress || 0)));
+        const queueLength = Math.max(0, Number(job?.queue_length || 0));
+
+        statusText.textContent = `${status.toUpperCase()}: ${message}`;
+        timelapseProgressBar.style.width = `${progress}%`;
+        timelapseQueueText.textContent = `Queue: ${queueLength} pending`;
+
+        const active = status === 'running' || status === 'queued';
+        spin.style.display = active ? 'inline-block' : 'none';
+        setGenerateButtonsDisabled(active);
       };
 
       const syncMergeDownloadState = () => {
@@ -1150,15 +1187,15 @@
             method: 'POST',
             body: JSON.stringify({ output: 'mp4', date: selectedDate || null }),
           });
-          if (result.status === 'running') {
-            spin.style.display = 'inline-block';
-            statusText.textContent = `Generating MP4 for ${scopeLabel}...`;
-            setGenerateButtonsDisabled(true);
-            if (!state.timelapsePollHandle) {
-              state.timelapsePollHandle = setInterval(pollJob, 1500);
-            }
+          renderTimelapseJob(result);
+          if (!state.timelapsePollHandle) {
+            state.timelapsePollHandle = setInterval(pollJob, 1500);
           }
-          showToast('MP4 export job started', 'warning');
+          if (result.status === 'queued') {
+            showToast(`MP4 job queued for ${scopeLabel}`, 'warning');
+          } else {
+            showToast(`MP4 export started for ${scopeLabel}`, 'warning');
+          }
         } catch (err) {
           showToast(`Timelapse start failed: ${err.message}`, 'error');
         }
@@ -1225,12 +1262,9 @@
         try {
           const status = await api('/api/status');
           const job = status.timelapse_job || {};
-          const running = job.status === 'running';
-          spin.style.display = running ? 'inline-block' : 'none';
-          statusText.textContent = job.message || 'Use a date to filter the gallery and generate exports for that day.';
+          renderTimelapseJob(job);
           if (job.status === 'completed') {
             showToast('Timelapse generated', 'success');
-            setGenerateButtonsDisabled(false);
             syncTimelapseButtons();
             loadExportDates();
             clearInterval(state.timelapsePollHandle);
@@ -1238,7 +1272,6 @@
           }
           if (job.status === 'error') {
             showToast(`Timelapse error: ${job.message}`, 'error');
-            setGenerateButtonsDisabled(false);
             clearInterval(state.timelapsePollHandle);
             state.timelapsePollHandle = null;
           }
@@ -1260,6 +1293,9 @@
 
       syncTimelapseButtons();
       loadExportDates();
+      api('/api/status')
+        .then((status) => renderTimelapseJob(status.timelapse_job || {}))
+        .catch(() => {});
       setInterval(syncTimelapseButtons, 8000);
       setInterval(loadExportDates, 30000);
       pollMergeStatus();

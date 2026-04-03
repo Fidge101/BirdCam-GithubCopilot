@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 from pathlib import Path
+from collections.abc import Callable
 
 import numpy as np
 from PIL import Image
@@ -64,6 +65,22 @@ def _prepare_images(
     return images
 
 
+def _prepare_frame_array(frame_path: Path, thumbnail_size: tuple[int, int]) -> np.ndarray:
+    """Load one frame, normalize it to thumbnail_size, and return RGB array."""
+
+    with Image.open(frame_path) as image:
+        prepared = image.convert("RGB")
+        prepared.thumbnail(thumbnail_size)
+
+        canvas = Image.new("RGB", thumbnail_size, color=(0, 0, 0))
+        offset = (
+            (thumbnail_size[0] - prepared.width) // 2,
+            (thumbnail_size[1] - prepared.height) // 2,
+        )
+        canvas.paste(prepared, offset)
+        return np.array(canvas)
+
+
 def _video_frames(images: list[Image.Image]) -> list[np.ndarray]:
     """Convert prepared images into arrays suitable for MP4 writing."""
 
@@ -75,6 +92,7 @@ def generate_timelapse_mp4_from_frames(
     output_path: str | Path,
     thumbnail_size: tuple[int, int] = (320, 180),
     fps: int = 8,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Generate an MP4 from a specific list of frame files."""
 
@@ -83,12 +101,18 @@ def generate_timelapse_mp4_from_frames(
 
     _validate_inputs(frame_paths, thumbnail_size)
     output_path = Path(output_path)
-    images = _prepare_images(frame_paths, thumbnail_size)
-    mp4_frames = _video_frames(images)
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    imageio.mimsave(output_path, mp4_frames, fps=fps)
-    LOGGER.info("Generated MP4 timelapse using %s frames -> %s", len(images), output_path)
+    total_frames = len(frame_paths)
+    writer = imageio.get_writer(str(output_path), fps=fps, codec="libx264")
+    try:
+        for index, frame_path in enumerate(frame_paths, start=1):
+            writer.append_data(_prepare_frame_array(frame_path, thumbnail_size))
+            if on_progress is not None:
+                on_progress(index, total_frames)
+    finally:
+        writer.close()
+
+    LOGGER.info("Generated MP4 timelapse using %s frames -> %s", total_frames, output_path)
     return output_path
 
 
@@ -97,6 +121,7 @@ def generate_timelapse_mp4(
     output_path: str | Path,
     thumbnail_size: tuple[int, int] = (320, 180),
     fps: int = 8,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Generate an MP4 from all JPEG frames in a directory."""
 
@@ -110,6 +135,7 @@ def generate_timelapse_mp4(
         output_path,
         thumbnail_size=thumbnail_size,
         fps=fps,
+        on_progress=on_progress,
     )
 
 
@@ -118,6 +144,7 @@ def generate_timelapse_from_frames(
     output_path: str | Path,
     columns: int = 10,
     thumbnail_size: tuple[int, int] = (320, 180),
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Generate MP4 output from a specific list of frames.
 
@@ -128,7 +155,12 @@ def generate_timelapse_from_frames(
     _ = columns
     base_output_path = Path(output_path)
     mp4_path = base_output_path.with_suffix(base_output_path.suffix + ".mp4")
-    return generate_timelapse_mp4_from_frames(frame_paths, mp4_path, thumbnail_size=thumbnail_size)
+    return generate_timelapse_mp4_from_frames(
+        frame_paths,
+        mp4_path,
+        thumbnail_size=thumbnail_size,
+        on_progress=on_progress,
+    )
 
 
 def generate_timelapse(
@@ -136,6 +168,7 @@ def generate_timelapse(
     output_path: str | Path,
     columns: int = 10,
     thumbnail_size: tuple[int, int] = (320, 180),
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Generate MP4 output from all captured frames."""
 
@@ -144,7 +177,13 @@ def generate_timelapse(
     if not frames:
         raise ValueError(f"No JPEG frames found in {frame_dir}")
 
-    return generate_timelapse_from_frames(frames, output_path, columns=columns, thumbnail_size=thumbnail_size)
+    return generate_timelapse_from_frames(
+        frames,
+        output_path,
+        columns=columns,
+        thumbnail_size=thumbnail_size,
+        on_progress=on_progress,
+    )
 
 
 def generate_daily_timelapse_export(
@@ -153,6 +192,7 @@ def generate_daily_timelapse_export(
     target_date: date,
     columns: int = 10,
     thumbnail_size: tuple[int, int] = (320, 180),
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Generate dated daily timelapse outputs using only one day's frames."""
 
@@ -165,4 +205,10 @@ def generate_daily_timelapse_export(
 
     day_dir = export_root / target_date.isoformat()
     day_output = day_dir / "timelapse.jpg"
-    return generate_timelapse_from_frames(day_frames, day_output, columns=columns, thumbnail_size=thumbnail_size)
+    return generate_timelapse_from_frames(
+        day_frames,
+        day_output,
+        columns=columns,
+        thumbnail_size=thumbnail_size,
+        on_progress=on_progress,
+    )
