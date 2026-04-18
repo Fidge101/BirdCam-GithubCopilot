@@ -218,7 +218,7 @@ In the dashboard Timelapse panel, use `Download MP4` after generation completes.
 
 If the live feed goes blank, use the `Reconnect Camera` button in the dashboard status panel to manually reset RTSP streams without restarting the app.
 
-Automatic stream failover/reconnect is disabled; recovery is manual via `Reconnect Camera`.
+Automatic stream reconnect is enabled: after `BLANK_FRAME_RECONNECT_THRESHOLD` consecutive blank or failed reads the stream is re-opened automatically.  The `Reconnect Camera` button remains available for immediate manual recovery.
 
 To prevent spam reconnect loops, the reconnect endpoint enforces a short cooldown between reset requests.
 
